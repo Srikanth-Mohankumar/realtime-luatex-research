@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""Local demo bridge: browser <-> a persistent LuaTeX engine, for editing
-ONE production-marked .tex document live.
+"""Local demo bridge: browser <-> persistent LuaTeX engines, serving a
+QUEUE of production-marked .tex articles.
 
-Run:  python3 server.py [path/to/article.tex] [port]
-      (default: ../templates/ieeetran/article.tex, port 8123)
-Open: http://localhost:8123/
+Run:  python3 server.py [article.tex | scan-root ...] [port]
+      defaults: scan prototype/testdocs + /data/neopage/watcher/to-check,
+      port 8123. Open http://localhost:8123/ and pick an article.
 
-Paragraphs are identified by the PRODUCTION wrapper convention:
+Discovery: any .tex containing \\documentclass AND \\paraid{...} markers
+(generated variants like -dev/-live/-serve/-conv/-marked excluded).
+Articles found outside the workdir are COPIED (whole folder) into
+prototype/testdocs/ first — originals are never touched.
 
-  \\tagStructPara{}\\paraid{para10}\\NeoParStart{T}he text ...\\tagStructParaEnd{}%
-
-\\paraid{<id>} plants the paragraph attribute during the capture pass
-(rtcapture.sty redefines it), so captured contexts, page glyphs, and edit
-requests are all keyed by the production paragraph id. The browser edits
-the FULL source file; the paragraph under the cursor takes the fast path,
-and the full edited source recompiles in the background (convergence).
+Per article (lazy, on first open; engines LRU-capped):
+  * FAST PATH — persistent lualatex with the article's preamble; every
+    keystroke recompiles the edited paragraph with its captured context.
+  * DIFFERENTIAL PAGINATION — stable-profile edits patch the page cache
+    in place; structural edits repaginate immediately.
+  * CONVERGENCE — single-shot preamble-resident engines (pool, prewarmed)
+    re-typeset the body in ~3 s and emit the REAL PDF, rasterized for the
+    print view.
+  * WATCHER — satellite.json changes auto-repaginate.
 """
 import json
 import os
@@ -32,23 +37,59 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "client"))
 from rtclient import Server, match_para, build_request, lua_val  # noqa: E402
 
-args = [a for a in sys.argv[1:]]
-DOC_FILE = Path(args[0]).resolve() if args and not args[0].isdigit() \
-    else ROOT / "templates" / "ieeetran" / "article.tex"
-PORT = int(args[-1]) if args and args[-1].isdigit() else 8123
-DIR = DOC_FILE.parent
-STEM = DOC_FILE.stem
+WORKDIR = ROOT / "testdocs"
+WORKDIR.mkdir(exist_ok=True)
 ENV = {**os.environ, "TEXINPUTS": str(ROOT / "engine") + ":"}
+GENERATED = ("-live", "-serve", "-conv", "-marked", "-body", "-draft",
+             "-dev", "-forautoqc", "preamble-only")
+
+args = [a for a in sys.argv[1:] if not a.isdigit()]
+PORT = int(sys.argv[-1]) if sys.argv[1:] and sys.argv[-1].isdigit() else 8123
+SCAN_ROOTS = ([Path(a).resolve() for a in args] if args else
+              [WORKDIR, Path("/data/neopage/watcher/to-check")])
 
 PARA_RE = re.compile(
     r"\\paraid\{([\w.-]+)\}(.*?)(?:\\tagStructParaEnd\{\}|\n[ \t]*\n|$)", re.S)
 
 
-def parse_paras(source):
-    """{paraid: paragraph source text (lines joined)} from production marks."""
-    return {m.group(1): " ".join(
-        l.strip() for l in m.group(2).strip().splitlines())
-        for m in PARA_RE.finditer(source)}
+def discover():
+    """[(display name, path)] of production-marked main tex files."""
+    out = []
+    for root in SCAN_ROOTS:
+        if root.is_file():
+            out.append(root)
+            continue
+        if not root.is_dir():
+            continue
+        for p in sorted(root.rglob("*.tex")):
+            if any(tag in p.stem for tag in GENERATED):
+                continue
+            try:
+                head = p.read_text(errors="replace")
+            except OSError:
+                continue
+            if "\\documentclass" in head and "\\paraid{" in head:
+                out.append(p)
+    seen, docs = set(), []
+    for p in out:
+        if p.stem in seen:
+            continue
+        seen.add(p.stem)
+        docs.append(p)
+    return docs
+
+
+def workdir_copy(path):
+    """Ensure the article lives under WORKDIR; copy its folder in if not."""
+    path = path.resolve()
+    if WORKDIR in path.parents:
+        return path
+    dest = WORKDIR / path.parent.parent.name if \
+        path.parent.name == "process_folder" else WORKDIR / path.parent.name
+    if not (dest / path.name).exists():
+        print(f"copying {path.parent} -> {dest}")
+        shutil.copytree(path.parent, dest, dirs_exist_ok=True)
+    return dest / path.name
 
 
 def sanitize(text):
@@ -64,43 +105,41 @@ def sanitize(text):
     return text
 
 
-def with_rtcapture(source):
-    return source.replace("\\begin{document}",
-                          "\\usepackage{rtcapture}\n\\begin{document}", 1)
+def parse_paras(source):
+    return {m.group(1): " ".join(
+        l.strip() for l in m.group(2).strip().splitlines())
+        for m in PARA_RE.finditer(source)}
 
 
 class ConvEngine:
-    """Convergence engine: preamble loaded once, body typeset on request
-    (converge-loop.lua). Runs in --draftmode: shipout callbacks fire (so
-    the capture is produced) but no PDF is written. Used SINGLE-SHOT; a
-    unique jobname keeps concurrent engines' log/aux files apart."""
+    """Single-shot convergence engine: preamble resident, body typeset once
+    on request (converge-loop.lua), REAL PDF finalized on graceful quit."""
 
     _seq = 0
 
-    def __init__(self, preamble):
+    def __init__(self, doc):
         ConvEngine._seq += 1
-        self.jobname = f"{STEM}-conv{ConvEngine._seq}"
-        (DIR / f"{STEM}-conv.tex").write_text(
-            preamble + "\\usepackage{rtcapture}\n\\begin{document}\n"
+        self.doc = doc
+        self.jobname = f"{doc.stem}-conv{ConvEngine._seq}"
+        (doc.dir / f"{doc.stem}-conv.tex").write_text(
+            doc.preamble + "\\usepackage{rtcapture}\n\\begin{document}\n"
             "\\directlua{dofile(\""
             + str(ROOT / "engine" / "converge-loop.lua") + "\")}%\n"
             "\\newif\\ifserving \\servingtrue\n"
             "\\loop\\directlua{CONV_ONE()}\\ifserving\\repeat\n"
             "\\end{document}\n")
         t0 = time.perf_counter()
-        # no --draftmode: each run also produces the REAL PDF; the trailer
-        # is finalized when the engine QUITs after its single run
         self.proc = subprocess.Popen(
             ["lualatex", "-interaction=nonstopmode",
-             f"-jobname={self.jobname}", f"{STEM}-conv.tex"],
-            cwd=DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+             f"-jobname={self.jobname}", f"{doc.stem}-conv.tex"],
+            cwd=doc.dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             text=True, bufsize=1, env=ENV)
         for line in self.proc.stdout:
             if "CONVREADY" in line:
                 break
         else:
             raise RuntimeError("convergence engine never became ready")
-        print(f"[{STEM}] convergence engine ready in "
+        print(f"[{doc.stem}] convergence engine ready in "
               f"{time.perf_counter() - t0:.1f} s (preamble resident)")
 
     def run(self, bodyfile, outjson, auxfile, timeout=90):
@@ -129,8 +168,6 @@ class ConvEngine:
         return box
 
     def quit(self):
-        """Graceful end: \\end{document} runs so the PDF trailer is
-        written and the run's PDF becomes valid."""
         try:
             self.proc.stdin.write("QUIT\n")
             self.proc.stdin.flush()
@@ -145,143 +182,114 @@ class ConvEngine:
 
 
 class Doc:
-    def __init__(self):
+    def __init__(self, tex_path):
+        self.file = workdir_copy(Path(tex_path))
+        self.dir = self.file.parent
+        self.stem = self.file.stem
         self.lock = threading.Lock()
         self.conv_lock = threading.Lock()
         self.rev = 1
         self.converging = False
         self.conv_timer = None
-        self.source = DOC_FILE.read_text()
+        self.conv_error = None
+        self.last_conv_s = None
+        self.source = self.file.read_text()
 
-        print(f"[{STEM}] compiling reference ({DOC_FILE.name})...")
-        (DIR / f"{STEM}-live.tex").write_text(with_rtcapture(self.source))
+        print(f"[{self.stem}] compiling reference ({self.file.name})...")
+        self.write_live()
         for _ in range(2):
-            r = self.compile_tex(f"{STEM}-live.tex")
+            r = self.compile_tex(f"{self.stem}-live.tex")
         if "RTCAPTURE: wrote" not in r.stdout:
             print(r.stdout[-2500:])
-            sys.exit("reference compile failed")
+            raise RuntimeError(f"{self.stem}: reference compile failed")
         self.write_serve()
         self.load_capture()
-        print(f"[{STEM}] {len(self.body)} paragraphs (\\paraid), "
+        print(f"[{self.stem}] {len(self.body)} paragraphs, "
               f"{len(self.pages)} pages")
         self.spawn()
         self.preamble = self.split_source(self.source)[0]
-        # Convergence engines are SINGLE-SHOT: validation showed the
-        # production template's float machinery leaks state across body
-        # re-runs (run 2 lost the figure pages). Each engine is used for
-        # exactly one repagination — guaranteed first-run semantics, which
-        # we verified byte-identical to a fresh compile. A POOL of warm
-        # engines absorbs bursts of structural edits; refills happen in
-        # the background off the critical path.
         self.pool = []
         self.pool_lock = threading.Lock()
         self.pool_target = 2
-        self.pool.append(ConvEngine(self.preamble))
+        self.pool.append(ConvEngine(self))
         self.prewarm_async()
         self.start_watcher()
-        # print view: page PNGs of the latest real PDF
         self.pdf_rev = 0
         self.png_dir = None
-        self.render_pngs_async(DIR / f"{STEM}-live.pdf", self.rev)
+        self.render_pngs_async(self.dir / f"{self.stem}-live.pdf", self.rev)
 
-    def render_pngs_async(self, pdfpath, rev, proc=None):
-        """Rasterize a converged PDF's pages for the print view. If proc is
-        given (a quitting engine), wait for it to exit first so the PDF
-        trailer is written."""
-        def work():
-            try:
-                if proc is not None:
-                    # drain stdout until EOF: the quitting engine still
-                    # writes \end{document} chatter and would BLOCK on a
-                    # full pipe, never exiting and never finalizing the PDF
-                    try:
-                        for _ in proc.stdout:
-                            pass
-                    except Exception:
-                        pass
-                    proc.wait(timeout=120)
-                if not Path(pdfpath).exists():
-                    return
-                outdir = DIR / f"{STEM}-pngs-r{rev}"
-                outdir.mkdir(exist_ok=True)
-                subprocess.run(
-                    ["pdftoppm", "-png", "-r", "110", str(pdfpath),
-                     str(outdir / "p")],
-                    capture_output=True, timeout=300)
-                old = self.png_dir
-                self.png_dir, self.pdf_rev = outdir, rev
-                print(f"[{STEM}] print view ready for rev {rev}")
-                if old and old != outdir:
-                    import shutil as sh
-                    sh.rmtree(old, ignore_errors=True)
-                if "-conv" in Path(pdfpath).name:
-                    Path(pdfpath).unlink(missing_ok=True)
-            except Exception as e:
-                print(f"[{STEM}] png render failed: {e}")
-        threading.Thread(target=work, daemon=True).start()
+    # ---- source plumbing ----
+    @staticmethod
+    def split_source(source):
+        m = re.search(r"(.*?\\begin\{document\})(.*)(\\end\{document\})",
+                      source, re.S)
+        return (m.group(1)[:-len("\\begin{document}")], m.group(2))
 
-    # ---- supporting-file watcher ----
-    # The template reads satellite.json (float placement/dimensions) at
-    # BODY time (activated after \maketitle — verified), so single-shot
-    # convergence engines pick up its current content on every run. This
-    # watcher makes edits to supporting files trigger repagination on
-    # their own. Extra globs via RT_WATCH=... (comma separated); set
-    # RT_WATCH_PREAMBLE=1 if a template reads watched files at preamble
-    # time (drains the warm pool on change).
-    def start_watcher(self):
-        import glob as globlib
-        globs = ["satellite.json"] + [
-            g for g in os.environ.get("RT_WATCH", "").split(",") if g]
-        drain = os.environ.get("RT_WATCH_PREAMBLE") == "1"
+    def write_live(self):
+        (self.dir / f"{self.stem}-live.tex").write_text(
+            self.source.replace(
+                "\\begin{document}",
+                "\\usepackage{rtcapture}\n\\begin{document}", 1))
 
-        def snap():
-            m = {}
-            for g in globs:
-                for f in globlib.glob(str(DIR / g)):
-                    try:
-                        m[f] = os.path.getmtime(f)
-                    except OSError:
-                        pass
-            return m
+    def write_serve(self):
+        m = re.search(r"(.*?)\\begin\{document\}", self.source, re.S)
+        (self.dir / f"{self.stem}-serve.tex").write_text(
+            m.group(1) + "\\begin{document}\n"
+            "\\directlua{dofile(\"" + str(ROOT / "engine" / "serve2.lua")
+            + "\")}%\n"
+            "\\directlua{RTLOADAUX(\"" + f"{self.stem}-live.aux" + "\")}%\n"
+            "\\newif\\ifserving \\servingtrue\n"
+            "\\loop\\directlua{SERVE_ONE()}\\ifserving\\repeat\n"
+            "\\end{document}\n")
 
-        self._watch = snap()
-        if self._watch:
-            print(f"[{STEM}] watching supporting files: "
-                  + ", ".join(Path(f).name for f in self._watch))
+    def compile_tex(self, name):
+        return subprocess.run(
+            ["lualatex", "-interaction=nonstopmode", name],
+            cwd=self.dir, capture_output=True, text=True, env=ENV,
+            timeout=300)
 
-        def loop():
-            while True:
-                time.sleep(1.0)
-                if self.converging:
-                    self._watch = snap()   # ignore our own runs' writes
-                    continue
-                cur = snap()
-                if cur != self._watch:
-                    names = {Path(f).name
-                             for f in set(cur) ^ set(self._watch)} | \
-                            {Path(f).name for f in cur
-                             if f in self._watch and cur[f] != self._watch[f]}
-                    self._watch = cur
-                    print(f"[{STEM}] supporting file changed "
-                          f"({', '.join(sorted(names))}): repaginating")
-                    if drain:
-                        self.drain_pool()
-                        self.prewarm_async()
-                    self.last_stable = False
-                    if self.conv_timer:
-                        self.conv_timer.cancel()
-                    self.conv_timer = threading.Timer(0.2, self.converge)
-                    self.conv_timer.daemon = True
-                    self.conv_timer.start()
+    def load_capture(self, path=None):
+        data = json.loads(
+            (path or self.dir / f"{self.stem}-live-capture.json").read_text())
+        self.captured = data["paras"]
+        self.ids = data.get("ids", {})
+        id_of = {int(k): v for k, v in self.ids.items()}
+        for p in self.captured:
+            p["pid"] = id_of.get(p["attr"]) if p["attr"] is not None else None
+        self.pages = data.get("pages", [])
+        self.fonts = data.get("fonts", {})
+        self.body = parse_paras(self.source)
+        self.caps = {}
+        for pid, text in self.body.items():
+            cands = [p for p in self.captured if p["pid"] == pid]
+            if cands:
+                self.caps[pid] = match_para(
+                    None, text, [dict(p, attr=None) for p in cands])
 
-        threading.Thread(target=loop, daemon=True).start()
+    # ---- fast-path engine ----
+    def spawn(self):
+        t0 = time.perf_counter()
+        self.srv = Server(self.dir, f"{self.stem}-serve.tex", env=ENV)
+        fonts = sorted({(p["font_name"], p["font_size"])
+                        for p in self.captured if p["font_name"]})
+        self.srv.request(lua_val({"preload": [list(f) for f in fonts]}))
+        print(f"[{self.stem}] engine ready in "
+              f"{(time.perf_counter() - t0) * 1000:.0f} ms")
 
+    def respawn(self):
+        try:
+            self.srv.proc.kill()
+        except Exception:
+            pass
+        self.spawn()
+
+    # ---- convergence engine pool ----
     def take_conv_engine(self):
         with self.pool_lock:
             if self.pool:
                 return self.pool.pop()
-        print(f"[{STEM}] no warm engine (edit burst): paying preamble")
-        return ConvEngine(self.preamble)
+        print(f"[{self.stem}] no warm engine (edit burst): paying preamble")
+        return ConvEngine(self)
 
     def drain_pool(self):
         with self.pool_lock:
@@ -297,86 +305,75 @@ class Doc:
                         return
                     pre = self.preamble
                 try:
-                    eng = ConvEngine(pre)
+                    eng = ConvEngine(self)
                 except Exception as e:
-                    print(f"[{STEM}] prewarm failed: {e}")
+                    print(f"[{self.stem}] prewarm failed: {e}")
                     return
                 with self.pool_lock:
                     if pre == self.preamble:
                         self.pool.append(eng)
                     else:
-                        eng.kill()   # preamble changed while warming
+                        eng.kill()
         threading.Thread(target=work, daemon=True).start()
 
-    @staticmethod
-    def split_source(source):
-        m = re.search(r"(.*?\\begin\{document\})(.*)(\\end\{document\})",
-                      source, re.S)
-        pre_bd = m.group(1)
-        return pre_bd[:-len("\\begin{document}")], m.group(2)
-
-    def write_serve(self):
-        m = re.search(r"(.*?)\\begin\{document\}", self.source, re.S)
-        (DIR / f"{STEM}-serve.tex").write_text(
-            m.group(1) + "\\begin{document}\n"
-            "\\directlua{dofile(\"" + str(ROOT / "engine" / "serve2.lua")
-            + "\")}%\n"
-            "\\directlua{RTLOADAUX(\"" + f"{STEM}-live.aux" + "\")}%\n"
-            "\\newif\\ifserving \\servingtrue\n"
-            "\\loop\\directlua{SERVE_ONE()}\\ifserving\\repeat\n"
-            "\\end{document}\n")
-
-    def compile_tex(self, name):
-        return subprocess.run(
-            ["lualatex", "-interaction=nonstopmode", name],
-            cwd=DIR, capture_output=True, text=True, env=ENV, timeout=300)
-
-    def load_capture(self, path=None):
-        data = json.loads(
-            (path or DIR / f"{STEM}-live-capture.json").read_text())
-        self.captured = data["paras"]
-        self.ids = data.get("ids", {})            # attr int (str) -> paraid
-        id_of = {int(k): v for k, v in self.ids.items()}
-        for p in self.captured:
-            p["pid"] = id_of.get(p["attr"]) if p["attr"] is not None else None
-        self.pages = data.get("pages", [])
-        self.fonts = data.get("fonts", {})
-        self.body = parse_paras(self.source)
-        self.caps = {}
-        for pid, text in self.body.items():
-            cands = [p for p in self.captured if p["pid"] == pid]
-            if cands:
-                # reuse fingerprint ranking from rtclient.match_para
-                best = match_para(None, text,
-                                  [dict(p, attr=None) for p in cands])
-                self.caps[pid] = best
-
-    def spawn(self):
-        t0 = time.perf_counter()
-        self.srv = Server(DIR, f"{STEM}-serve.tex", env=ENV)
-        fonts = sorted({(p["font_name"], p["font_size"])
-                        for p in self.captured if p["font_name"]})
-        self.srv.request(lua_val({"preload": [list(f) for f in fonts]}))
-        print(f"[{STEM}] engine ready in "
-              f"{(time.perf_counter() - t0) * 1000:.0f} ms")
-
-    def respawn(self):
+    def shutdown(self):
+        """Free all engine processes (LRU eviction)."""
+        if self.conv_timer:
+            self.conv_timer.cancel()
         try:
             self.srv.proc.kill()
         except Exception:
             pass
-        self.spawn()
+        self.drain_pool()
+        print(f"[{self.stem}] session shut down (evicted)")
+
+    # ---- supporting-file watcher ----
+    def start_watcher(self):
+        import glob as globlib
+        globs = ["satellite.json"] + [
+            g for g in os.environ.get("RT_WATCH", "").split(",") if g]
+        drain = os.environ.get("RT_WATCH_PREAMBLE") == "1"
+
+        def snap():
+            m = {}
+            for g in globs:
+                for f in globlib.glob(str(self.dir / g)):
+                    try:
+                        m[f] = os.path.getmtime(f)
+                    except OSError:
+                        pass
+            return m
+
+        self._watch = snap()
+        if self._watch:
+            print(f"[{self.stem}] watching: "
+                  + ", ".join(Path(f).name for f in self._watch))
+
+        def loop():
+            while True:
+                time.sleep(1.0)
+                if self.converging:
+                    self._watch = snap()
+                    continue
+                cur = snap()
+                if cur != self._watch:
+                    names = {Path(f).name for f in set(cur) ^ set(self._watch)} | \
+                            {Path(f).name for f in cur
+                             if f in self._watch and cur[f] != self._watch[f]}
+                    self._watch = cur
+                    print(f"[{self.stem}] supporting file changed "
+                          f"({', '.join(sorted(names))}): repaginating")
+                    if drain:
+                        self.drain_pool()
+                        self.prewarm_async()
+                    self.last_stable = False
+                    self.schedule(0.2)
+
+        threading.Thread(target=loop, daemon=True).start()
 
     # ---- differential pagination, tier 0 ----
-    # A stable-height edit (same line count, same total height) moves
-    # NOTHING else on any page: patch the page cache in place and defer
-    # the expensive full recompile instead of scheduling it eagerly.
     @staticmethod
     def sig_vprofile(sig):
-        """Vertical profile relative to the first baseline. The reference
-        signature (post_linebreak) carries the leading interline glue from
-        the document context, the fast-path vbox doesn't — absolute extents
-        differ by a constant, relative profiles must match exactly."""
         if not sig:
             return None
         y1 = sig[0]["y"]
@@ -386,27 +383,25 @@ class Doc:
         attr = next((int(k) for k, v in self.ids.items() if v == pid), None)
         if attr is None or not sig or not sig[0]["g"]:
             return False
-        hits = [pg for pg in self.pages
-                if any(g[4] == attr for g in pg["g"])]
-        if len(hits) != 1:      # straddles pages/columns -> convergence path
+        hits = [pg for pg in self.pages if any(g[4] == attr for g in pg["g"])]
+        if len(hits) != 1:
             return False
         pg = hits[0]
         idx0 = next(i for i, g in enumerate(pg["g"]) if g[4] == attr)
         first = pg["g"][idx0]
-        # anchor on the paragraph's first glyph, in the NEW sig's own space
         x0 = first[1] - sig[0]["g"][0][1]
         y0 = first[2] - sig[0]["y"]
         for fid, f in (fonts or {}).items():
             self.fonts["s" + str(fid)] = f
-        newg = [[ln_g[0], x0 + ln_g[1], y0 + line["y"], "s" + str(ln_g[2]), attr]
-                for line in sig for ln_g in line["g"]]
+        newg = [[g0[0], x0 + g0[1], y0 + line["y"], "s" + str(g0[2]), attr]
+                for line in sig for g0 in line["g"]]
         rest = [g for g in pg["g"] if g[4] != attr]
         at = sum(1 for g in pg["g"][:idx0] if g[4] != attr)
         pg["g"] = rest[:at] + newg + rest[at:]
-        self.caps[pid]["sig"] = sig   # future patches key off current state
+        self.caps[pid]["sig"] = sig
         return True
 
-    # ---- fast path: one paragraph, by production id ----
+    # ---- fast path ----
     def compile(self, pid, text):
         cap = self.caps.get(pid)
         if cap is None:
@@ -441,32 +436,60 @@ class Doc:
             self.last_stable = stable
         return resp
 
-    # ---- background convergence: full edited source ----
+    # ---- background convergence ----
     @staticmethod
     def skeleton(source):
-        """Source with paragraph BODIES blanked: captures document
-        structure (sections, floats, markers, preamble). If the skeleton
-        changed, the edit is structural — sections/paragraphs were added
-        or removed — and repagination must run immediately."""
         return PARA_RE.sub(lambda m: "\\paraid{%s}<>" % m.group(1), source)
+
+    def schedule(self, delay):
+        if self.conv_timer:
+            self.conv_timer.cancel()
+        self.conv_timer = threading.Timer(delay, self.converge)
+        self.conv_timer.daemon = True
+        self.conv_timer.start()
 
     def update_source(self, source):
         structural = self.skeleton(source) != self.skeleton(self.source)
         self.source = source
-        if self.conv_timer:
-            self.conv_timer.cancel()
         if structural:
-            delay = 0.2          # sections/paragraphs changed: go now
+            delay = 0.2
             self.last_stable = False
         elif getattr(self, "last_stable", False):
-            delay = 25.0         # page cache already patched in place
+            delay = 25.0
         else:
-            delay = 1.2          # height-changing paragraph edit
-        self.conv_timer = threading.Timer(delay, self.converge)
-        self.conv_timer.daemon = True
-        self.conv_timer.start()
+            delay = 1.2
+        self.schedule(delay)
         return {"scheduled": True, "delay": delay,
                 "structural": structural, "rev": self.rev}
+
+    def render_pngs_async(self, pdfpath, rev, proc=None):
+        def work():
+            try:
+                if proc is not None:
+                    try:
+                        for _ in proc.stdout:
+                            pass
+                    except Exception:
+                        pass
+                    proc.wait(timeout=120)
+                if not Path(pdfpath).exists():
+                    return
+                outdir = self.dir / f"{self.stem}-pngs-r{rev}"
+                outdir.mkdir(exist_ok=True)
+                subprocess.run(
+                    ["pdftoppm", "-png", "-r", "110", str(pdfpath),
+                     str(outdir / "p")],
+                    capture_output=True, timeout=300)
+                old = self.png_dir
+                self.png_dir, self.pdf_rev = outdir, rev
+                print(f"[{self.stem}] print view ready for rev {rev}")
+                if old and old != outdir:
+                    shutil.rmtree(old, ignore_errors=True)
+                if "-conv" in Path(pdfpath).name:
+                    Path(pdfpath).unlink(missing_ok=True)
+            except Exception as e:
+                print(f"[{self.stem}] png render failed: {e}")
+        threading.Thread(target=work, daemon=True).start()
 
     def converge(self):
         with self.conv_lock:
@@ -477,19 +500,15 @@ class Doc:
                 pre, body = self.split_source(self.source)
                 fast_ok = False
                 if pre == self.preamble:
-                    # fast repagination: body-only re-typeset in a warm
-                    # preamble-resident engine (used once, then replaced)
-                    (DIR / f"{STEM}-body.tex").write_text(body)
-                    out = DIR / f"{STEM}-conv-capture.json"
+                    (self.dir / f"{self.stem}-body.tex").write_text(body)
+                    out = self.dir / f"{self.stem}-conv-capture.json"
                     eng = self.take_conv_engine()
-                    r = eng.run(f"{STEM}-body.tex", out.name,
-                                f"{STEM}-live.aux")
+                    r = eng.run(f"{self.stem}-body.tex", out.name,
+                                f"{self.stem}-live.aux")
                     if "ms" in r:
-                        # graceful end finalizes this run's real PDF; the
-                        # print view rasterizes it in the background
                         eng.quit()
                         self.render_pngs_async(
-                            DIR / f"{eng.jobname}.pdf", self.rev + 1,
+                            self.dir / f"{eng.jobname}.pdf", self.rev + 1,
                             proc=eng.proc)
                     else:
                         eng.kill()
@@ -497,28 +516,25 @@ class Doc:
                     if "ms" in r:
                         self.load_capture(out)
                         fast_ok = True
-                        self.last_conv_s = round(
-                            time.perf_counter() - t0, 2)
-                        print(f"[{STEM}] converged rev {self.rev + 1} in "
-                              f"{self.last_conv_s} s (warm engine, "
+                        self.last_conv_s = round(time.perf_counter() - t0, 2)
+                        print(f"[{self.stem}] converged rev {self.rev + 1} "
+                              f"in {self.last_conv_s} s (warm engine, "
                               f"body {r['ms']:.0f} ms)")
                     else:
-                        print(f"[{STEM}] warm engine failed "
+                        print(f"[{self.stem}] warm engine failed "
                               f"({r.get('err')}); falling back")
                 else:
-                    # preamble edited: engines hold a stale preamble
-                    print(f"[{STEM}] preamble changed: full compile + "
+                    print(f"[{self.stem}] preamble changed: full compile + "
                           "engine respawn")
                 if not fast_ok:
-                    (DIR / f"{STEM}-live.tex").write_text(
-                        with_rtcapture(self.source))
-                    r2 = self.compile_tex(f"{STEM}-live.tex")
+                    self.write_live()
+                    r2 = self.compile_tex(f"{self.stem}-live.tex")
                     if "RTCAPTURE: wrote" not in r2.stdout:
                         errs = [l for l in r2.stdout.splitlines()
                                 if l.startswith("!")]
                         self.conv_error = (errs[0] if errs
                                            else "compile produced no capture")
-                        print(f"[{STEM}] convergence FAILED: "
+                        print(f"[{self.stem}] convergence FAILED: "
                               f"{self.conv_error}")
                         return
                     self.load_capture()
@@ -530,10 +546,10 @@ class Doc:
                         with self.lock:
                             self.respawn()
                     self.last_conv_s = round(time.perf_counter() - t0, 2)
-                    print(f"[{STEM}] converged rev {self.rev + 1} in "
+                    print(f"[{self.stem}] converged rev {self.rev + 1} in "
                           f"{self.last_conv_s} s (full compile)")
-                    self.render_pngs_async(DIR / f"{STEM}-live.pdf",
-                                           self.rev + 1)
+                    self.render_pngs_async(
+                        self.dir / f"{self.stem}-live.pdf", self.rev + 1)
                 self.rev += 1
             finally:
                 self.converging = False
@@ -547,12 +563,36 @@ class Doc:
                 "sig": cap["sig"] if cap else [],
                 "font_size": cap["font_size"] if cap else 655360,
             })
-        return {"name": DOC_FILE.name, "rev": self.rev,
+        return {"name": self.file.name, "rev": self.rev,
                 "source": self.source, "paras": paras,
                 "ids": self.ids, "pages": self.pages, "fonts": self.fonts}
 
 
-THE_DOC = None
+# ---- session registry (LRU-capped: engines are expensive) ----
+CATALOG = discover()
+SESSIONS = {}          # stem -> Doc
+LRU = []               # stems, most recent last
+MAX_SESSIONS = 2
+REG_LOCK = threading.Lock()
+
+
+def get_doc(stem):
+    with REG_LOCK:
+        if stem in SESSIONS:
+            LRU.remove(stem)
+            LRU.append(stem)
+            return SESSIONS[stem]
+    path = next((p for p in CATALOG if p.stem == stem), None)
+    if path is None:
+        raise KeyError(stem)
+    d = Doc(path)
+    with REG_LOCK:
+        SESSIONS[stem] = d
+        LRU.append(stem)
+        while len(LRU) > MAX_SESSIONS:
+            evict = LRU.pop(0)
+            SESSIONS.pop(evict).shutdown()
+    return d
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -563,12 +603,38 @@ class Handler(BaseHTTPRequestHandler):
         data = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
+    def q(self):
+        if "?" not in self.path:
+            return {}
+        return dict(p.split("=", 1) for p in
+                    self.path.split("?", 1)[1].split("&") if "=" in p)
+
     def do_GET(self):
+        try:
+            self._get()
+        except Exception as e:
+            try:
+                self.send_json({"error": f"{type(e).__name__}: {e}"}, 500)
+            except Exception:
+                pass
+
+    def do_POST(self):
+        try:
+            self._post()
+        except Exception as e:
+            try:
+                self.send_json({"error": f"{type(e).__name__}: {e}"}, 500)
+            except Exception:
+                pass
+
+    def _get(self):
         route = self.path.split("?", 1)[0]
+        q = self.q()
         if route in ("/", "/index.html"):
             data = (HERE / "index.html").read_bytes()
             self.send_response(200)
@@ -576,32 +642,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        elif self.path.startswith("/api/doc"):
-            self.send_json(THE_DOC.doc())
-        elif self.path.startswith("/api/rev"):
-            self.send_json({"rev": THE_DOC.rev,
-                            "converging": THE_DOC.converging,
-                            "conv_s": getattr(THE_DOC, "last_conv_s", None),
-                            "pdf_rev": THE_DOC.pdf_rev,
-                            "error": getattr(THE_DOC, "conv_error", None)})
-        elif self.path.startswith("/api/page-image"):
-            q = dict(p.split("=") for p in
-                     self.path.split("?", 1)[1].split("&"))
+        elif route == "/api/docs":
+            self.send_json([p.stem for p in CATALOG])
+        elif route == "/api/doc":
+            self.send_json(get_doc(q["doc"]).doc())
+        elif route == "/api/rev":
+            d = get_doc(q["doc"])
+            self.send_json({"rev": d.rev, "converging": d.converging,
+                            "conv_s": d.last_conv_s, "pdf_rev": d.pdf_rev,
+                            "error": d.conv_error})
+        elif route == "/api/page-image":
+            d = get_doc(q["doc"])
             i = int(q["i"])
-            d = THE_DOC.png_dir
             hit = None
-            if d:
+            if d.png_dir:
                 for pat in (f"p-{i:02d}.png", f"p-{i:d}.png",
                             f"p-{i:03d}.png"):
-                    if (d / pat).exists():
-                        hit = d / pat
+                    if (d.png_dir / pat).exists():
+                        hit = d.png_dir / pat
                         break
             if hit:
                 data = hit.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(data)))
-                # the same URL must never serve a stale page raster
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(data)
@@ -610,23 +674,23 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_json({"error": "not found"}, 404)
 
-    def do_POST(self):
+    def _post(self):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or "{}")
+        d = get_doc(body["doc"])
         if self.path == "/api/compile":
-            self.send_json(THE_DOC.compile(body["id"], body["text"]))
+            self.send_json(d.compile(body["id"], body["text"]))
         elif self.path == "/api/source":
-            self.send_json(THE_DOC.update_source(body["source"]))
+            self.send_json(d.update_source(body["source"]))
         elif self.path == "/api/restart":
-            with THE_DOC.lock:
-                THE_DOC.respawn()
+            with d.lock:
+                d.respawn()
             self.send_json({"ok": True})
         else:
             self.send_json({"error": "not found"}, 404)
 
 
 if __name__ == "__main__":
-    THE_DOC = Doc()
-    print(f"editing {DOC_FILE}")
-    print(f"demo at http://localhost:{PORT}/")
+    print(f"articles: {', '.join(p.stem for p in CATALOG) or '(none found)'}")
+    print(f"demo at http://localhost:{PORT}/  (sessions spawn on first open)")
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

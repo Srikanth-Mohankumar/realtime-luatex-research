@@ -32,7 +32,7 @@
 <body>
 <header>
   <h1>Real-Time LuaTeX</h1>
-  <span id="docname" style="opacity:.8"></span>
+  <select id="docsel"></select>
   <button id="restart" title="respawn the engine if wedged">&#10227; engine</button>
   <button id="pview" title="show the real typeset PDF pages (latest converged rev) under live overlays">print view</button>
   <div class="hud">
@@ -77,7 +77,8 @@ function glyphChar(c, fname) {
 }
 const mathItalic = fname => /cmmi|lmmi|txmi/.test(fname);
 
-let DOC = null, inflight = false, dirty = null, polling = false, srcTimer = null;
+let DOC = null, DOCID = null, inflight = false, dirty = null, polling = false, srcTimer = null;
+const withDoc = (url) => url + (url.includes('?') ? '&' : '?') + 'doc=' + encodeURIComponent(DOCID);
 // print view (real PDF page rasters) is the DEFAULT; ?print=0 or the
 // toggle switches to the glyph-reconstruction view
 let printView = new URLSearchParams(location.search).get('print') !== '0';
@@ -155,7 +156,7 @@ function renderPages() {
     }
     // print view: the real rasterized PDF page as underlay; glyph/rule
     // reconstruction hidden (overlays still draw on top)
-    const und = el('image', {href:`/api/page-image?i=${pi+1}&r=${pdfRev}`,
+    const und = el('image', {href:withDoc(`/api/page-image?i=${pi+1}&r=${pdfRev}`),
       x:0, y:0, width:px(pg.w), height:px(pg.h), class:'underlay'});
     svg.insertBefore(und, base);
     for (const [x, y, w, h, st] of pg.r) {
@@ -191,7 +192,7 @@ function applyView() {
 function refreshUnderlays() {
   let i = 0;
   document.querySelectorAll('image.underlay').forEach(im => {
-    im.setAttribute('href', `/api/page-image?i=${++i}&r=${pdfRev}`);
+    im.setAttribute('href', withDoc(`/api/page-image?i=${++i}&r=${pdfRev}`));
   });
 }
 
@@ -287,7 +288,7 @@ async function compilePara(pid, text) {
   if (inflight) { dirty = [pid, text]; return; }
   inflight = true;
   const t0 = performance.now();
-  const resp = await j('/api/compile', {id: pid, text});
+  const resp = await j(withDoc('/api/compile'), {doc: DOCID, id: pid, text});
   inflight = false;
   if (!resp.error) {
     overlay(pid, resp.sig, resp.fonts);
@@ -313,7 +314,7 @@ async function pollConvergence() {
   badge.firstChild.textContent = 'converging… rev ';
   for (let i = 0; i < 120; i++) {
     await new Promise(r => setTimeout(r, 700));
-    const s = await j('/api/rev');
+    const s = await j(withDoc('/api/rev'));
     if (s.error) {
       badge.className = 'busy';
       badge.firstChild.textContent = '⚠ ' + s.error.slice(0, 48) + ' · rev ';
@@ -322,7 +323,7 @@ async function pollConvergence() {
     }
     if (s.rev !== DOC.rev && !s.converging) {
       const src = $('src').value;         // keep user's buffer
-      DOC = await j('/api/doc');
+      DOC = await j(withDoc('/api/doc'));
       if (s.pdf_rev) { pdfRev = s.pdf_rev; }
       clearOverlays();
       renderPages();
@@ -368,45 +369,63 @@ function onEdit() {
   }
   clearTimeout(srcTimer);
   srcTimer = setTimeout(async () => {
-    await j('/api/source', {source: src});
+    await j(withDoc('/api/source'), {doc: DOCID, source: src});
     pollConvergence();
   }, 500);
 }
 
-(async () => {
-  DOC = await j('/api/doc');
-  $('docname').textContent = DOC.name;
+async function loadDoc(stem) {
+  DOCID = stem;
+  $('pages').innerHTML =
+    '<p style="color:#666;padding:30px">opening article — first open ' +
+    'compiles the reference and warms engines (can take ~1 min for a ' +
+    'heavy template)…</p>';
+  $('src').value = '';
+  DOC = await j(withDoc('/api/doc'));
   $('h-rev').textContent = DOC.rev;
+  $('src').value = DOC.source;
+  const s0 = await j(withDoc('/api/rev'));
+  pdfRev = s0.pdf_rev || 0;
+  clearOverlays();
+  renderPages();
+  refreshUnderlays();
+}
+
+(async () => {
+  const docs = await j('/api/docs');
+  const sel = $('docsel');
+  for (const s of docs) {
+    const o = document.createElement('option');
+    o.value = o.textContent = s;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change', () => loadDoc(sel.value));
   const ta = $('src');
-  ta.value = DOC.source;
   ta.addEventListener('input', onEdit);
   ta.addEventListener('click', () => {
     const span = spanAt(scanSpans(ta.value), ta.selectionStart);
     $('curpara').textContent = span ? '¶ ' + span.id : '¶ (outside paragraph)';
   });
-  $('restart').addEventListener('click', () => j('/api/restart', {}));
+  $('restart').addEventListener('click', () => j(withDoc('/api/restart'), {doc: DOCID}));
   $('pview').addEventListener('click', () => {
     printView = !printView;
     $('pview').style.background = printView ? '#f5c76a' : '';
     applyView();
   });
-  const s0 = await j('/api/rev');
-  pdfRev = s0.pdf_rev || 0;
   if (printView) $('pview').style.background = '#f5c76a';
-  renderPages();
-  refreshUnderlays();
+  await loadDoc(docs[0]);
   // idle poll: repaginations triggered outside the editor (supporting-file
   // watcher, other clients) and freshly rasterized PDFs re-render without
   // a local edit
   setInterval(async () => {
     if (polling) return;
-    const s = await j('/api/rev');
+    const s = await j(withDoc('/api/rev'));
     if (s.pdf_rev && s.pdf_rev !== pdfRev) {
       pdfRev = s.pdf_rev;
       refreshUnderlays();
     }
     if (s.rev !== DOC.rev && !s.converging) {
-      DOC = await j('/api/doc');
+      DOC = await j(withDoc('/api/doc'));
       clearOverlays();
       renderPages();
       $('h-rev').textContent = DOC.rev;
