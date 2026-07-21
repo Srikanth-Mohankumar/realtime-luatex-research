@@ -114,10 +114,101 @@ local function on_post(head, groupcode)
   return true
 end
 
+-- ---------------------------------------------------------------------
+-- Page capture at shipout: absolute-positioned glyph display list per
+-- page (the "page-position cache" of the architecture). Every glyph
+-- carries its \RTpara attribute so the client can locate paragraphs on
+-- the page and overlay live recompiles.
+
+local pages = {}
+local page_fonts = {}
+local RULE = node.id("rule")
+local GLUE = node.id("glue")
+local KERN = node.id("kern")
+local DISC = node.id("disc")
+local VLIST = node.id("vlist")
+
+local vwalk_abs  -- forward
+
+local function hwalk_abs(head, x, y, set, sign, order, out)
+  for n in node.traverse(head) do
+    local adv = node.dimensions(set, sign, order, n, n.next)
+    local id = n.id
+    if id == GLYPH then
+      page_fonts[n.font] = true
+      out.g[#out.g + 1] = { n.char, x, y, n.font,
+                            node.get_attribute(n, M.attr) or -1 }
+    elseif id == DISC then
+      if n.replace then hwalk_abs(n.replace, x, y, set, sign, order, out) end
+    elseif id == HLIST then
+      hwalk_abs(n.head, x, y + n.shift,
+                n.glue_set, n.glue_sign, n.glue_order, out)
+    elseif id == VLIST then
+      vwalk_abs(n.head, x, y + n.shift - n.height,
+                n.glue_set, n.glue_sign, n.glue_order, out)
+    elseif id == RULE then
+      if n.width > 0 and n.width < 1073741824 then
+        out.r[#out.r + 1] = { x, y - n.height, n.width, n.height + n.depth }
+      end
+    end
+    x = x + adv
+  end
+end
+
+-- y is the TOP edge of the vertical material
+vwalk_abs = function(head, x, y, set, sign, order, out)
+  for n in node.traverse(head) do
+    local adv = node.dimensions(set, sign, order, n, n.next)
+    local id = n.id
+    if id == HLIST then
+      hwalk_abs(n.head, x + n.shift, y + n.height,
+                n.glue_set, n.glue_sign, n.glue_order, out)
+    elseif id == VLIST then
+      vwalk_abs(n.head, x + n.shift, y,
+                n.glue_set, n.glue_sign, n.glue_order, out)
+    elseif id == RULE then
+      if n.width > 0 and n.width < 1073741824 then
+        out.r[#out.r + 1] = { x, y, n.width, n.height + n.depth }
+      end
+    end
+    y = y + adv
+  end
+end
+
+local IN = 4736287  -- 1in in sp: TeX's page origin offset
+
+local function on_shipout(head)
+  local out = { g = {}, r = {} }
+  -- head is the shipout box's content (or the box itself); walk whatever
+  -- vertical material we find, origin at TeX's 1in+offset convention
+  local x0 = IN + tex.hoffset
+  local y0 = IN + tex.voffset
+  for n in node.traverse(head) do
+    local adv = node.dimensions(0, 0, 0, n, n.next)
+    if n.id == HLIST then
+      hwalk_abs(n.head, x0 + n.shift, y0 + n.height,
+                n.glue_set, n.glue_sign, n.glue_order, out)
+    elseif n.id == VLIST then
+      vwalk_abs(n.head, x0 + n.shift, y0,
+                n.glue_set, n.glue_sign, n.glue_order, out)
+    end
+    y0 = y0 + adv
+  end
+  out.w = tex.pagewidth > 0 and tex.pagewidth or 39158276   -- a4 fallback
+  out.h = tex.pageheight > 0 and tex.pageheight or 55380996
+  pages[#pages + 1] = out
+  return true
+end
+
 function M.start()
   luatexbase.add_to_callback("insert_local_par", on_local_par, "rtcapture.localpar")
   luatexbase.add_to_callback("pre_linebreak_filter", on_pre, "rtcapture.pre")
   luatexbase.add_to_callback("post_linebreak_filter", on_post, "rtcapture.post")
+  local ok = pcall(luatexbase.add_to_callback,
+                   "pre_shipout_filter", on_shipout, "rtcapture.shipout")
+  if not ok then
+    texio.write_nl("RTCAPTURE: no pre_shipout_filter — page capture disabled")
+  end
 end
 
 local function num_or_null(v) return v ~= nil and tostring(v) or "null" end
@@ -158,11 +249,34 @@ function M.finish(path)
       p.lang, p.lhmin, p.rhmin, p.uchyph,
       p.font_name, p.font_size, p.fp, p.sig and sig.sig_json(p.sig) or "[]")
   end
+  -- pages: absolute display lists from shipout
+  local pparts = {}
+  for _, pg in ipairs(pages) do
+    local gp, rp = {}, {}
+    for _, g in ipairs(pg.g) do
+      gp[#gp + 1] = string.format("[%d,%d,%d,%d,%d]", g[1], g[2], g[3], g[4], g[5])
+    end
+    for _, r in ipairs(pg.r) do
+      rp[#rp + 1] = string.format("[%d,%d,%d,%d]", r[1], r[2], r[3], r[4])
+    end
+    pparts[#pparts + 1] = string.format(
+      '{"w":%d,"h":%d,"g":[%s],"r":[%s]}',
+      pg.w, pg.h, table.concat(gp, ","), table.concat(rp, ","))
+  end
+  local fparts = {}
+  for id in pairs(page_fonts) do
+    local f = font.getfont(id) or font.fonts[id] or {}
+    fparts[#fparts + 1] = string.format('"%d":{"name":%q,"size":%d}',
+      id, f.name or "", f.size or 655360)
+  end
   local fh = io.open(path, "w")
-  fh:write('{"paras":[\n' .. table.concat(out, ",\n") .. "\n]}\n")
+  fh:write('{"paras":[\n' .. table.concat(out, ",\n") .. "\n],\n")
+  fh:write('"fonts":{' .. table.concat(fparts, ",") .. '},\n')
+  fh:write('"pages":[\n' .. table.concat(pparts, ",\n") .. "\n]}\n")
   fh:close()
   texio.write_nl("term and log",
-    string.format("RTCAPTURE: wrote %d paragraphs to %s", #M.paras, path))
+    string.format("RTCAPTURE: wrote %d paragraphs, %d pages to %s",
+                  #M.paras, #pages, path))
 end
 
 return M

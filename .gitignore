@@ -11,3 +11,5 @@ __pycache__/
 *.out
 *.abs
 *.toc
+prototype/templates/*/body-live.tex
+prototype/templates/*/sample-live*

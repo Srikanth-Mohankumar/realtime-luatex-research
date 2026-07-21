@@ -7,4 +7,5 @@
 \directlua{RTCAPTURE = dofile("../../engine/capture.lua")}
 \newcommand\RTpara[1]{\directlua{RTCAPTURE.setpara(#1)}}
 \AtBeginDocument{\directlua{RTCAPTURE.start()}}
-\AtEndDocument{\directlua{RTCAPTURE.finish(tex.jobname .. "-capture.json")}}
+% \clearpage first: the final page must ship before we write the capture
+\AtEndDocument{\clearpage\directlua{RTCAPTURE.finish(tex.jobname .. "-capture.json")}}

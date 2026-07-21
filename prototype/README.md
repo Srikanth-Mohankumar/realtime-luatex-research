@@ -50,14 +50,22 @@ cd prototype/demo && python3 server.py      # then open http://localhost:8123
 
 `demo/server.py` (stdlib only) bridges a browser page to the persistent
 engines — one lualatex process per template, spawned on first use. The page
-shows the article body on the left (editable source per paragraph) and the
-typeset column on the right, rendered as SVG from the engine's display
-lists. **Every keystroke round-trips through real LuaTeX**: the edited
-paragraph is re-broken with its captured context and repositioned
-glyph-by-glyph; paragraphs below re-stack; the HUD shows in-engine time,
-bridge round-trip, and browser total. Unedited paragraphs render from the
-full compile's cached reference signatures — the background-convergence
-overlay pattern in miniature.
+shows the article source on the left (editable per paragraph) and the **real
+document pages** on the right: full page display lists captured at shipout
+(`pre_shipout_filter` walk in capture.lua) — title block, abstract,
+two-column body, floats, footnotes, rules — every glyph at its absolute
+page position, keyed by paragraph attribute.
+
+Both halves of the architecture run live:
+
+- **Fast path** — every keystroke round-trips through real LuaTeX (~1–3 ms):
+  the edited paragraph is re-broken with its captured context and *overlaid*
+  (dark red) at its cached page origin.
+- **Background convergence** — after 1.5 s idle, the bridge substitutes all
+  edits into the body, runs a real full compile (`sample-live.tex`), and
+  serves the fresh page cache; the client polls a revision counter and
+  re-renders — page breaks, column balance, and positions converge in ~2 s,
+  and the overlay merges back into the page.
 
 Honesty note: glyph *positions* are engine-exact scaled points; glyph
 *outlines* use the browser's serif font as a stand-in (pixel-true outlines
