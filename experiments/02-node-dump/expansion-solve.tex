@@ -1,0 +1,55 @@
+% expansion-solve.tex -- solve for the exact expansion arithmetic:
+% given a line with glue_set etc., find ratio r such that
+% sum(glyph widths)*(1+r) + kerns*(1+r) + effective glue = line.width
+% Run: lualatex --interaction=nonstopmode expansion-solve.tex
+\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[activate={true,nocompatibility},expansion=true,protrusion=false,
+            stretch=30,shrink=60]{microtype}
+\usepackage{luacode}
+\begin{luacode*}
+local SP = 65536
+local GLYPH = node.id("glyph")
+local GLUE  = node.id("glue")
+local KERN  = node.id("kern")
+local HLIST = node.id("hlist")
+local done = false
+luatexbase.add_to_callback("post_linebreak_filter", function(head)
+  if done then return true end
+  done = true
+  local lineno = 0
+  for line in node.traverse_id(HLIST, head) do
+    lineno = lineno + 1
+    local gw, gn, kw, kn, glue, other = 0, 0, 0, 0, 0, 0
+    local ef = nil
+    for n in node.traverse(line.head) do
+      if n.id == GLYPH then
+        gw = gw + n.width ; gn = gn + 1
+        ef = n.expansion_factor
+      elseif n.id == KERN then
+        kw = kw + n.kern ; kn = kn + 1
+      elseif n.id == GLUE then
+        glue = glue + node.effective_glue(n, line)
+      elseif n.id == node.id("disc") then
+        other = other + (n.replace and node.dimensions(n.replace) or 0)
+      elseif n.id == HLIST or n.id == node.id("vlist") or n.id == node.id("rule") then
+        other = other + n.width
+      end
+    end
+    local target = line.width - glue - other
+    local r_glyphs_only = (target - kw) / gw - 1
+    local r_with_kerns  = target / (gw + kw) - 1
+    texio.write_nl(string.format(
+      "LINE %d ef=%s glyphs=%d kerns=%d r(glyphs-only)=%.6f r(glyphs+kerns)=%.6f",
+      lineno, tostring(ef), gn, kn, r_glyphs_only, r_with_kerns))
+  end
+  return true
+end, "solve")
+\end{luacode*}
+\begin{document}
+\hsize=200pt\parindent=0pt
+The quick brown fox jumps over the lazy dog while the cunning red
+squirrel watches quietly from a very tall oak tree nearby and
+considers the meaning of typography.\par
+\end{document}

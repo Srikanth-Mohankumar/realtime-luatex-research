@@ -1,0 +1,24 @@
+% server.tex — a persistent LuaTeX "paragraph server".
+%
+% Replicates the architecture of texlode (Lode, TUG2026, section 5):
+%   1. Keep the engine alive: pay the ~1s book-class+microtype preamble
+%      startup once; then loop.
+%   2. Read paragraph text requests from stdin (one per line).
+%   3. Typeset each into \box0 (line breaking runs, page builder does not).
+%   4. Extract the display list from the node structures (extract.lua from
+%      experiment 03) and write it to stdout as one JSON line, with the
+%      in-engine elapsed time.
+% A client (client.py) measures full round-trip latency (paper's Table 3).
+%
+% Protocol on stdin:  <paragraph text>\n   |  QUIT\n
+% Protocol on stdout: READY\n once after preamble, then one
+%                     {"ms":..., "commands":[...]}\n per request.
+\documentclass{book}
+\usepackage{microtype}
+\begin{document}
+\directlua{dofile("serve.lua")}%
+\newif\ifserving \servingtrue
+\loop
+  \directlua{SERVE_ONE()}%
+\ifserving\repeat
+\end{document}

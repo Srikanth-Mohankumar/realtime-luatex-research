@@ -1,0 +1,79 @@
+% expansion-verify.tex -- verify the exact expanded-width formula:
+%   advance = width + width * (glyph.expansion_factor/1000) * (efcode/1000) / 1000
+% where efcode is the per-character \efcode (also visible as the character's
+% expansion_factor in font.getfont(fid).characters[c]).
+% Run: lualatex --interaction=nonstopmode expansion-verify.tex
+\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[activate={true,nocompatibility},expansion=true,protrusion=false,
+            stretch=30,shrink=60]{microtype}
+\usepackage{luacode}
+\begin{luacode*}
+local SP = 65536
+local function pt(sp) return string.format("%.4fpt", sp/SP) end
+local GLYPH = node.id("glyph")
+local GLUE  = node.id("glue")
+local KERN  = node.id("kern")
+local HLIST = node.id("hlist")
+
+EF = {}  -- efcode per character, filled by a TeX loop in the document
+
+local function expanded(width, ef, efcode)
+  -- candidate formula: glyph.expansion_factor is in thousandths,
+  -- additionally scaled by the per-character \efcode (per mille):
+  --   advance = width * (1 + ef * efcode / 10^9)
+  return width * (1 + ef * efcode / 1000000000)
+end
+
+local done = false
+luatexbase.add_to_callback("post_linebreak_filter", function(head)
+  if done then return true end
+  done = true
+  local lineno = 0
+  for line in node.traverse_id(HLIST, head) do
+    lineno = lineno + 1
+    local x = 0
+    local chars_seen = {}
+    for n in node.traverse(line.head) do
+      if n.id == GLYPH then
+        local fnt = font.getfont(n.font)
+        local chr = fnt.characters[n.char]
+        local efcode = EF[n.char] or 1000
+        if not chars_seen[n.char] then
+          chars_seen[n.char] = true
+          texio.write_nl(string.format(
+            "  %q width=%s glyph.ef=%d \\efcode=%d chr.expansion_factor=%s",
+            utf8.char(n.char), pt(n.width), n.expansion_factor, efcode,
+            tostring(chr and chr.expansion_factor)))
+        end
+        x = x + expanded(n.width, n.expansion_factor, efcode)
+      elseif n.id == KERN then
+        -- guess: kerns use the efcode of ... just the raw ef for now
+        x = x + n.kern * (1 + n.expansion_factor/1000000)
+      elseif n.id == GLUE then
+        x = x + node.effective_glue(n, line)
+      elseif n.id == node.id("disc") then
+        x = x + (n.replace and node.dimensions(n.replace) or 0)
+      elseif n.id == HLIST or n.id == node.id("vlist") or n.id == node.id("rule") then
+        x = x + n.width
+      end
+    end
+    texio.write_nl(string.format("LINE %d accumulated=%s width=%s delta=%.1fsp",
+      lineno, pt(x), pt(line.width), x - line.width))
+  end
+  return true
+end, "verify")
+\end{luacode*}
+\begin{document}
+\hsize=200pt\parindent=0pt
+% dump the \efcode of every latin char of the current font into Lua
+\newcount\efc \efc=32
+\loop
+  \directlua{EF[\the\efc] = \the\efcode\font\efc\relax}%
+  \advance\efc by 1
+\ifnum\efc<256 \repeat
+The quick brown fox jumps over the lazy dog while the cunning red
+squirrel watches quietly from a very tall oak tree nearby and
+considers the meaning of typography.\par
+\end{document}
