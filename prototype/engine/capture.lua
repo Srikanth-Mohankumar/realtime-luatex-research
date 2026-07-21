@@ -93,6 +93,11 @@ local function on_pre(head, groupcode)
     leftskip = glue_t(tex.leftskip), rightskip = glue_t(tex.rightskip),
     parfillskip = glue_t(tex.parfillskip),
     spaceskip = glue_t(tex.spaceskip), xspaceskip = glue_t(tex.xspaceskip),
+    -- interline spacing: line breaking doesn't read these, but the vertical
+    -- packing of the resulting lines does — without them the fast-path vbox
+    -- gets the server session's leading, not the document's
+    baselineskip = glue_t(tex.baselineskip), lineskip = glue_t(tex.lineskip),
+    lineskiplimit = tex.lineskiplimit,
     -- badness / demerit parameters
     pretolerance = tex.pretolerance, tolerance = tex.tolerance,
     emergencystretch = tex.emergencystretch,
@@ -277,7 +282,8 @@ function M.finish(path)
       '{"idx":%d,"group":"%s","attr":%s,"hsize":%d,"indent":%s,'
       .. '"hangindent":%d,"hangafter":%d,"parshape":%s,"looseness":%d,'
       .. '"leftskip":%s,"rightskip":%s,"parfillskip":%s,"spaceskip":%s,'
-      .. '"xspaceskip":%s,"pretolerance":%d,"tolerance":%d,'
+      .. '"xspaceskip":%s,"baselineskip":%s,"lineskip":%s,'
+      .. '"lineskiplimit":%d,"pretolerance":%d,"tolerance":%d,'
       .. '"emergencystretch":%d,"linepenalty":%d,"hyphenpenalty":%d,'
       .. '"exhyphenpenalty":%d,"adjdemerits":%d,"doublehyphendemerits":%d,'
       .. '"finalhyphendemerits":%d,"adjustspacing":%d,"protrudechars":%d,'
@@ -287,7 +293,8 @@ function M.finish(path)
       num_or_null(p.indent), p.hangindent, p.hangafter, ps, p.looseness,
       glue_json(p.leftskip), glue_json(p.rightskip),
       glue_json(p.parfillskip), glue_json(p.spaceskip),
-      glue_json(p.xspaceskip), p.pretolerance, p.tolerance,
+      glue_json(p.xspaceskip), glue_json(p.baselineskip),
+      glue_json(p.lineskip), p.lineskiplimit, p.pretolerance, p.tolerance,
       p.emergencystretch, p.linepenalty, p.hyphenpenalty,
       p.exhyphenpenalty, p.adjdemerits, p.doublehyphendemerits,
       p.finalhyphendemerits, p.adjustspacing, p.protrudechars,

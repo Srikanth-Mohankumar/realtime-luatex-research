@@ -90,6 +90,7 @@ def lua_val(v):
 CTX_FIELDS = [
     "hsize", "indent", "hangindent", "hangafter", "parshape", "looseness",
     "leftskip", "rightskip", "parfillskip", "spaceskip", "xspaceskip",
+    "baselineskip", "lineskip", "lineskiplimit",
     "pretolerance", "tolerance", "emergencystretch", "linepenalty",
     "hyphenpenalty", "exhyphenpenalty", "adjdemerits",
     "doublehyphendemerits", "finalhyphendemerits", "adjustspacing",

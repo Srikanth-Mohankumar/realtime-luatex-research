@@ -63,6 +63,11 @@ local function prologue(ctx)
   add("\\parfillskip=%s", glue_tex(ctx.parfillskip))
   add("\\spaceskip=%s", glue_tex(ctx.spaceskip))
   add("\\xspaceskip=%s", glue_tex(ctx.xspaceskip))
+  if ctx.baselineskip then
+    add("\\baselineskip=%s", glue_tex(ctx.baselineskip))
+    add("\\lineskip=%s", glue_tex(ctx.lineskip))
+    add("\\lineskiplimit=%dsp", ctx.lineskiplimit)
+  end
   add("\\pretolerance=%d \\tolerance=%d", ctx.pretolerance, ctx.tolerance)
   add("\\emergencystretch=%dsp", ctx.emergencystretch)
   add("\\linepenalty=%d \\hyphenpenalty=%d \\exhyphenpenalty=%d",

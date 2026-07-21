@@ -158,9 +158,11 @@ function renderPages() {
 function overlay(pid, sig, fonts) {
   const org = DOC._origin[pid];
   const para = DOC.paras.find(p => p.id === pid);
-  if (!org || !para || !para.sig.length || !para.sig[0].g.length) return;
-  const x0 = org.x - para.sig[0].g[0][1];
-  const y0 = org.y - para.sig[0].y;
+  if (!org || !para || !sig.length || !sig[0].g.length) return;
+  // anchor on the paragraph's first glyph, in the LIVE sig's own space
+  // (the reference sig carries leading interline glue the vbox doesn't)
+  const x0 = org.x - sig[0].g[0][1];
+  const y0 = org.y - sig[0].y;
   const svg = $('page' + org.page);
   const cached = svg.querySelector(`g[data-para="${pid}"]`);
   if (cached) cached.setAttribute('opacity', '0');
@@ -185,6 +187,48 @@ function overlay(pid, sig, fonts) {
 function clearOverlays() {
   document.querySelectorAll('g.overlay').forEach(g => g.remove());
   document.querySelectorAll('g[opacity="0"]').forEach(g => g.removeAttribute('opacity'));
+  document.querySelectorAll('[data-shifted]').forEach(e => {
+    e.removeAttribute('transform'); e.removeAttribute('data-shifted');
+  });
+}
+
+// extent below the first baseline (leading-glue independent: the reference
+// sig starts with document interline glue, live vbox sigs don't)
+const sigExtent = sig => sig.length
+  ? sig[sig.length-1].y + sig[sig.length-1].d - sig[0].y : 0;
+
+// Tier-1 differential pagination: while the real repagination converges in
+// the background, shift same-column material BELOW the edited paragraph by
+// the height delta so the column reflows instantly (word-processor style).
+// delta is vs the paragraph's reference signature; 0 clears the shift.
+function approxShift(pid, liveSig) {
+  const org = DOC._origin[pid];
+  const para = DOC.paras.find(p => p.id === pid);
+  if (!org || !para || !para.sig.length || !para.sig[0].g.length) return;
+  const dy = px(sigExtent(liveSig) - sigExtent(para.sig));
+  const svg = $('page' + org.page);
+  if (!svg) return;
+  const colW = px(Math.max(...para.sig.map(l => l.w), 1));
+  const x0 = px(org.x - para.sig[0].g[0][1]);
+  const yBot = px(org.y + sigExtent(para.sig));   // org.y = first baseline abs
+  const inCol = (x, y) => x >= x0 - colW*0.15 && x <= x0 + colW*1.05 && y > yBot;
+  const apply = (e, x, y) => {
+    if (Math.abs(dy) > 0.4 && inCol(x, y)) {
+      e.setAttribute('transform', `translate(0,${dy})`);
+      e.setAttribute('data-shifted', '1');
+    } else if (e.hasAttribute('data-shifted')) {
+      e.removeAttribute('transform'); e.removeAttribute('data-shifted');
+    }
+  };
+  svg.querySelectorAll('g[data-para]').forEach(g => {
+    if (g.dataset.para === pid) return;
+    const o = DOC._origin[g.dataset.para];
+    if (o && o.page === org.page) apply(g, px(o.x), px(o.y));
+  });
+  // base group (headings, captions, folios): first <g> in the page svg
+  const base = svg.querySelector('g');
+  if (base) base.querySelectorAll('text').forEach(t =>
+    apply(t, +t.getAttribute('x'), +t.getAttribute('y')));
 }
 
 // ---- fast path ----
@@ -196,8 +240,15 @@ async function compilePara(pid, text) {
   inflight = false;
   if (!resp.error) {
     overlay(pid, resp.sig, resp.fonts);
+    approxShift(pid, resp.sig);
     $('h-eng').textContent = resp.ms.toFixed(2);
     $('h-rt').textContent = (performance.now() - t0).toFixed(1);
+    const badge = $('conv');
+    if (resp.stable && !polling) {
+      badge.className = 'fresh';
+      badge.firstChild.textContent = 'page cache patched · rev ';
+      setTimeout(() => { if (!polling) badge.className = ''; }, 900);
+    }
   }
   if (dirty) { const [dp, dt] = dirty; dirty = null; compilePara(dp, dt); }
 }

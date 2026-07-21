@@ -142,6 +142,45 @@ class Doc:
             pass
         self.spawn()
 
+    # ---- differential pagination, tier 0 ----
+    # A stable-height edit (same line count, same total height) moves
+    # NOTHING else on any page: patch the page cache in place and defer
+    # the expensive full recompile instead of scheduling it eagerly.
+    @staticmethod
+    def sig_vprofile(sig):
+        """Vertical profile relative to the first baseline. The reference
+        signature (post_linebreak) carries the leading interline glue from
+        the document context, the fast-path vbox doesn't — absolute extents
+        differ by a constant, relative profiles must match exactly."""
+        if not sig:
+            return None
+        y1 = sig[0]["y"]
+        return [(l["y"] - y1, l["h"], l["d"]) for l in sig]
+
+    def patch_page(self, pid, sig, fonts):
+        attr = next((int(k) for k, v in self.ids.items() if v == pid), None)
+        if attr is None or not sig or not sig[0]["g"]:
+            return False
+        hits = [pg for pg in self.pages
+                if any(g[4] == attr for g in pg["g"])]
+        if len(hits) != 1:      # straddles pages/columns -> convergence path
+            return False
+        pg = hits[0]
+        idx0 = next(i for i, g in enumerate(pg["g"]) if g[4] == attr)
+        first = pg["g"][idx0]
+        # anchor on the paragraph's first glyph, in the NEW sig's own space
+        x0 = first[1] - sig[0]["g"][0][1]
+        y0 = first[2] - sig[0]["y"]
+        for fid, f in (fonts or {}).items():
+            self.fonts["s" + str(fid)] = f
+        newg = [[ln_g[0], x0 + ln_g[1], y0 + line["y"], "s" + str(ln_g[2]), attr]
+                for line in sig for ln_g in line["g"]]
+        rest = [g for g in pg["g"] if g[4] != attr]
+        at = sum(1 for g in pg["g"][:idx0] if g[4] != attr)
+        pg["g"] = rest[:at] + newg + rest[at:]
+        self.caps[pid]["sig"] = sig   # future patches key off current state
+        return True
+
     # ---- fast path: one paragraph, by production id ----
     def compile(self, pid, text):
         cap = self.caps.get(pid)
@@ -167,6 +206,14 @@ class Doc:
         rt, resp = box["r"]
         resp["rt_ms"] = round(rt, 3)
         resp["rev"] = self.rev
+        if "sig" in resp:
+            ref = cap.get("sig") or []
+            stable = (self.sig_vprofile(ref) ==
+                      self.sig_vprofile(resp["sig"]))
+            if stable:
+                stable = self.patch_page(pid, resp["sig"], resp.get("fonts"))
+            resp["stable"] = stable
+            self.last_stable = stable
         return resp
 
     # ---- background convergence: full edited source ----
@@ -174,10 +221,14 @@ class Doc:
         self.source = source
         if self.conv_timer:
             self.conv_timer.cancel()
-        self.conv_timer = threading.Timer(1.2, self.converge)
+        # stable edits already patched the page cache: the full recompile is
+        # only bookkeeping (tags/aux), so defer it well out of the typing
+        # flow; unstable edits need real repagination soon
+        delay = 25.0 if getattr(self, "last_stable", False) else 1.2
+        self.conv_timer = threading.Timer(delay, self.converge)
         self.conv_timer.daemon = True
         self.conv_timer.start()
-        return {"scheduled": True, "rev": self.rev}
+        return {"scheduled": True, "delay": delay, "rev": self.rev}
 
     def converge(self):
         with self.conv_lock:

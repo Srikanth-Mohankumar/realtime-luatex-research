@@ -79,6 +79,40 @@ loaded by opentype.js directly). Mid-edit input is survivable: the bridge
 strips comments, balances `$`/braces, and a 10 s watchdog respawns a wedged
 engine (⟳ button forces it).
 
+## Differential pagination (added after production testing)
+
+A production document's full compile can take 15+ s (the ACS test article:
+~13 s, dominated by the template pipeline, not images — draft-mode images
+changed nothing). Waiting that long after every edit frustrates users, so
+edits are now routed by their **pagination impact**:
+
+- **Tier 0 — vertical profile unchanged** (same line count, same per-line
+  heights/depths/spacing: the common case for word-level edits): *nothing
+  else on any page can move*, so the server patches the paragraph's glyphs
+  into the page cache **in place** (~30 ms total) and the full recompile is
+  deferred to a lazy 25 s tick (only needed for tagging/aux bookkeeping).
+  The stability check is exact to the scaled point — even a swapped word
+  that introduces a descender (changing the last line's depth by 0.18 pt)
+  correctly routes to real repagination.
+- **Tier 1 — height changed**: the client immediately shifts same-column
+  material below the edit by the height delta (word-processor-style
+  approximate reflow), while the real full recompile converges (~1.2 s
+  debounce + compile time). Page-boundary corrections arrive with the rev.
+
+Subtlety worth knowing: the reference signature (from `post_linebreak`)
+includes the *leading interline glue* against the previous paragraph, which
+an isolated vbox recompile cannot have — stability comparison and patch
+anchoring must use first-baseline-relative profiles, and `\baselineskip`/
+`\lineskip`/`\lineskiplimit` must be part of the captured context or the
+fast path gets the wrong leading (found on the production template, which
+uses non-default leading).
+
+True differential pagination for the tier-1 case — re-cutting pages from
+the edited page onward without re-typesetting untouched paragraphs
+(checkpoint/resume à la TeXpresso, or a galley re-cut from cached line
+boxes) — is the natural next milestone; today the convergence pass is a
+plain full compile.
+
 ## Results (2026-07-21, LuaHBTeX 1.22.0, TeX Live 2025, Linux)
 
 12 marked body paragraphs per template; fidelity = fast-path recompile
