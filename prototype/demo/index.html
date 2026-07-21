@@ -78,7 +78,9 @@ function glyphChar(c, fname) {
 const mathItalic = fname => /cmmi|lmmi|txmi/.test(fname);
 
 let DOC = null, inflight = false, dirty = null, polling = false, srcTimer = null;
-let printView = new URLSearchParams(location.search).get('print') === '1';
+// print view (real PDF page rasters) is the DEFAULT; ?print=0 or the
+// toggle switches to the glyph-reconstruction view
+let printView = new URLSearchParams(location.search).get('print') !== '0';
 let pdfRev = 0;
 
 const $ = id => document.getElementById(id);
@@ -208,6 +210,16 @@ function overlay(pid, sig, fonts) {
   let ov = document.getElementById('ov-' + pid);
   if (ov) ov.remove();
   ov = el('g', {id: 'ov-' + pid, class: 'overlay'});
+  // in print view the raster still shows the paragraph's OLD text until
+  // the next PDF arrives: mask its reference extent white first
+  if (printView) {
+    const colW = Math.max(...para.sig.map(l => l.w), 1);
+    ov.appendChild(el('rect', {
+      x: px(x0) - 2, y: px(org.y - para.sig[0].h) - 2,
+      width: px(colW) + 4,
+      height: px(para.sig[0].h + sigExtent(para.sig)) + 6,
+      fill: '#fff'}));
+  }
   for (const line of sig) {
     for (const [c, x, f] of line.g) {
       const info = fonts && fonts[String(f)];
@@ -311,8 +323,10 @@ async function pollConvergence() {
     if (s.rev !== DOC.rev && !s.converging) {
       const src = $('src').value;         // keep user's buffer
       DOC = await j('/api/doc');
+      if (s.pdf_rev) { pdfRev = s.pdf_rev; }
       clearOverlays();
       renderPages();
+      refreshUnderlays();
       $('h-rev').textContent = DOC.rev;
       badge.className = 'fresh';
       badge.firstChild.textContent = 'page cache rev ';

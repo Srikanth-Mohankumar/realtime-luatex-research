@@ -191,6 +191,14 @@ class Doc:
         def work():
             try:
                 if proc is not None:
+                    # drain stdout until EOF: the quitting engine still
+                    # writes \end{document} chatter and would BLOCK on a
+                    # full pipe, never exiting and never finalizing the PDF
+                    try:
+                        for _ in proc.stdout:
+                            pass
+                    except Exception:
+                        pass
                     proc.wait(timeout=120)
                 if not Path(pdfpath).exists():
                     return
@@ -593,6 +601,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(data)))
+                # the same URL must never serve a stale page raster
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(data)
             else:
