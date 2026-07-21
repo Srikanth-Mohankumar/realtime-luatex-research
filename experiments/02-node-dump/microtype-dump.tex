@@ -1,0 +1,71 @@
+% microtype-dump.tex -- show how font expansion (expansion_factor) and
+% protrusion (margin_kern nodes) appear in the post-linebreak node list.
+% Run: lualatex --interaction=nonstopmode microtype-dump.tex
+\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[activate={true,nocompatibility},expansion=true,protrusion=true,
+            factor=1100,stretch=30,shrink=60]{microtype}
+\usepackage{luacode}
+\begin{luacode*}
+local SP = 65536
+local function pt(sp) return string.format("%.4fpt", sp/SP) end
+local GLYPH = node.id("glyph")
+local GLUE  = node.id("glue")
+local KERN  = node.id("kern")
+local MKERN = node.id("margin_kern")
+local HLIST = node.id("hlist")
+
+local done = false
+luatexbase.add_to_callback("post_linebreak_filter", function(head, groupcode)
+  if done then return true end
+  done = true
+  local lineno = 0
+  for line in node.traverse_id(HLIST, head) do
+    lineno = lineno + 1
+    texio.write_nl(string.format(
+      "LINE %d width=%s glue_set=%.6f glue_sign=%d glue_order=%d",
+      lineno, pt(line.width), line.glue_set, line.glue_sign, line.glue_order))
+    local x = 0
+    for n in node.traverse(line.head) do
+      if n.id == GLYPH then
+        if n.expansion_factor ~= 0 then
+          texio.write_nl(string.format(
+            "  x=%-12s glyph %q width=%s expansion_factor=%d -> effective=%s",
+            pt(x), utf8.char(n.char), pt(n.width), n.expansion_factor,
+            pt(n.width * (1 + n.expansion_factor/1000000))))
+        end
+        x = x + n.width * (1 + n.expansion_factor/1000000)
+      elseif n.id == MKERN then
+        texio.write_nl(string.format(
+          "  x=%-12s margin_kern subtype=%d (%s) width=%s glyph=%q",
+          pt(x), n.subtype, n.subtype == 0 and "left" or "right",
+          pt(n.width), utf8.char(n.glyph.char)))
+        x = x + n.width
+      elseif n.id == GLUE then
+        x = x + node.effective_glue(n, line)
+      elseif n.id == KERN then
+        -- font kerns carry an expansion_factor too (\adjustspacing=2)
+        x = x + n.kern * (1 + n.expansion_factor/1000000)
+      elseif n.id == node.id("disc") then
+        x = x + (n.replace and node.dimensions(n.replace) or 0)
+      elseif n.id == HLIST or n.id == node.id("vlist") or n.id == node.id("rule") then
+        x = x + n.width
+      end
+    end
+    texio.write_nl(string.format("  END accumulated x=%s vs width=%s delta=%.1fsp",
+      pt(x), pt(line.width), x - line.width))
+    if lineno >= 3 then break end
+  end
+  texio.write_nl(string.format("\\adjustspacing=%d \\protrudechars=%d",
+    tex.adjustspacing, tex.protrudechars))
+  return true
+end, "dump")
+\end{luacode*}
+\begin{document}
+\hsize=200pt\parindent=0pt
+{\parshape 0
+Weniger bekannt ist, dass jeder Absatz mit optimalem Randausgleich und
+variabler Zeichenbreite gesetzt werden kann, wodurch die Grauwirkung
+deutlich gleichm\"a\ss iger wird.\par}
+\end{document}

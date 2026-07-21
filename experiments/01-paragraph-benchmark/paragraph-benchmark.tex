@@ -1,0 +1,16 @@
+% paragraph-benchmark.tex
+% Replication of Figure 1 from Lode, "Real-Time LuaTeX: Recompiling Large
+% Documents in 1ms" (TUG2026 preprint). Times a single paragraph's
+% typesetting inside a running LuaTeX session.
+\documentclass{book}
+\usepackage{microtype}
+\begin{document}
+\directlua{t0 = os.gettimeofday()}%
+The quick brown fox jumps over the lazy dog.
+\par
+\directlua{
+  local ms = (os.gettimeofday() - t0) * 1000
+  texio.write_nl("Paragraph: "
+    .. math.floor(ms * 100 + 0.5) / 100 .. " ms")
+}
+\end{document}

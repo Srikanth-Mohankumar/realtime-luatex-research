@@ -1,0 +1,13 @@
+% extract-driver.tex — typeset one paragraph into \box0, then extract its
+% display list from the node structures (see extract.lua).
+\documentclass{book}
+\usepackage{microtype}
+\begin{document}
+\directlua{dofile("extract.lua")}%
+\setbox0=\vbox{Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
+eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim
+veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+commodo consequat. Duis aute irure dolor in reprehenderit.\par}
+\directlua{EXTRACT(0)}
+\box0
+\end{document}
