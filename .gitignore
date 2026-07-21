@@ -16,3 +16,4 @@ prototype/templates/*/sample-live*
 prototype/templates/*/article-marked.*
 prototype/templates/*/article-live.*
 prototype/templates/*/article-serve.*
+prototype/testdocs/

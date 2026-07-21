@@ -15,7 +15,16 @@
 --     truth the fast path must reproduce.
 -- Writes <jobname>-capture.json at \AtEndDocument.
 
-local sig = dofile("../../engine/signature.lua")
+-- signature.lua lives next to this file. kpse finds it via TEXINPUTS
+-- (production templates nil out the debug library, so no debug.getinfo).
+local function locate(name)
+  local p = kpse and kpse.find_file and kpse.find_file(name, "tex")
+  if p then return p end
+  local d = debug and debug.getinfo
+            and debug.getinfo(1, "S").source:match("^@(.*)[/\\]")
+  return (d or "../../engine") .. "/" .. name
+end
+local sig = dofile(locate("signature.lua"))
 
 local M = { paras = {}, attr = luatexbase.new_attribute("RTpara") }
 
