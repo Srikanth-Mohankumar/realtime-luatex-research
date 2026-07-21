@@ -250,6 +250,15 @@ local function on_shipout(head)
   return true
 end
 
+-- reset between body re-runs in the persistent convergence engine: same
+-- callbacks, fresh capture state, fresh paragraph-id registry
+function M.reset()
+  M.paras, M.idmap, M.nextid = {}, {}, 0
+  pages, page_fonts = {}, {}
+  start_stack, current = {}, nil
+  tex.setattribute(M.attr, -2147483647)   -- "unset"
+end
+
 function M.start()
   luatexbase.add_to_callback("insert_local_par", on_local_par, "rtcapture.localpar")
   luatexbase.add_to_callback("pre_linebreak_filter", on_pre, "rtcapture.pre")

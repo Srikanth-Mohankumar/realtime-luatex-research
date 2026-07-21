@@ -69,6 +69,65 @@ def with_rtcapture(source):
                           "\\usepackage{rtcapture}\n\\begin{document}", 1)
 
 
+class ConvEngine:
+    """Persistent convergence engine: preamble loaded once, body re-typeset
+    in-session per request (converge-loop.lua). Runs in --draftmode: shipout
+    callbacks fire (so the capture is produced) but no PDF is written."""
+
+    def __init__(self, preamble):
+        (DIR / f"{STEM}-conv.tex").write_text(
+            preamble + "\\usepackage{rtcapture}\n\\begin{document}\n"
+            "\\directlua{dofile(\""
+            + str(ROOT / "engine" / "converge-loop.lua") + "\")}%\n"
+            "\\newif\\ifserving \\servingtrue\n"
+            "\\loop\\directlua{CONV_ONE()}\\ifserving\\repeat\n"
+            "\\end{document}\n")
+        t0 = time.perf_counter()
+        self.proc = subprocess.Popen(
+            ["lualatex", "--draftmode", "-interaction=nonstopmode",
+             f"{STEM}-conv.tex"],
+            cwd=DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            text=True, bufsize=1, env=ENV)
+        for line in self.proc.stdout:
+            if "CONVREADY" in line:
+                break
+        else:
+            raise RuntimeError("convergence engine never became ready")
+        print(f"[{STEM}] convergence engine ready in "
+              f"{time.perf_counter() - t0:.1f} s (preamble resident)")
+
+    def run(self, bodyfile, outjson, auxfile, timeout=90):
+        box = {}
+
+        def work():
+            try:
+                self.proc.stdin.write(f"RUN {bodyfile} {outjson} {auxfile}\n")
+                self.proc.stdin.flush()
+                for line in self.proc.stdout:
+                    if "CONVDONE" in line:
+                        box["ms"] = float(line.rsplit("CONVDONE", 1)[1])
+                        return
+                    if "CONVERR" in line:
+                        box["err"] = line.strip()
+                        return
+                box["err"] = "engine stream closed"
+            except Exception as e:
+                box["err"] = str(e)
+
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            box["err"] = "timeout"
+        return box
+
+    def kill(self):
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+
 class Doc:
     def __init__(self):
         self.lock = threading.Lock()
@@ -90,6 +149,36 @@ class Doc:
         print(f"[{STEM}] {len(self.body)} paragraphs (\\paraid), "
               f"{len(self.pages)} pages")
         self.spawn()
+        self.preamble = self.split_source(self.source)[0]
+        # Convergence engines are SINGLE-SHOT: validation showed the
+        # production template's float machinery leaks state across body
+        # re-runs (run 2 lost the figure pages). Each engine is used for
+        # exactly one repagination — guaranteed first-run semantics, which
+        # we verified byte-identical to a fresh compile — and a warm
+        # replacement is spawned in the background right away.
+        self.conv_engine = ConvEngine(self.preamble)
+
+    def take_conv_engine(self):
+        eng, self.conv_engine = self.conv_engine, None
+        if eng is None:
+            print(f"[{STEM}] no warm engine (rapid edits): paying preamble")
+            eng = ConvEngine(self.preamble)
+        return eng
+
+    def prewarm_async(self):
+        def work():
+            try:
+                self.conv_engine = ConvEngine(self.preamble)
+            except Exception as e:
+                print(f"[{STEM}] prewarm failed: {e}")
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def split_source(source):
+        m = re.search(r"(.*?\\begin\{document\})(.*)(\\end\{document\})",
+                      source, re.S)
+        pre_bd = m.group(1)
+        return pre_bd[:-len("\\begin{document}")], m.group(2)
 
     def write_serve(self):
         m = re.search(r"(.*?)\\begin\{document\}", self.source, re.S)
@@ -107,8 +196,9 @@ class Doc:
             ["lualatex", "-interaction=nonstopmode", name],
             cwd=DIR, capture_output=True, text=True, env=ENV, timeout=300)
 
-    def load_capture(self):
-        data = json.loads((DIR / f"{STEM}-live-capture.json").read_text())
+    def load_capture(self, path=None):
+        data = json.loads(
+            (path or DIR / f"{STEM}-live-capture.json").read_text())
         self.captured = data["paras"]
         self.ids = data.get("ids", {})            # attr int (str) -> paraid
         id_of = {int(k): v for k, v in self.ids.items()}
@@ -249,21 +339,59 @@ class Doc:
             self.conv_error = None
             t0 = time.perf_counter()
             try:
-                (DIR / f"{STEM}-live.tex").write_text(
-                    with_rtcapture(self.source))
-                r = self.compile_tex(f"{STEM}-live.tex")
-                if "RTCAPTURE: wrote" not in r.stdout:
-                    errs = [l for l in r.stdout.splitlines()
-                            if l.startswith("!")]
-                    self.conv_error = (errs[0] if errs
-                                       else "compile produced no capture")
-                    print(f"[{STEM}] convergence FAILED: {self.conv_error}")
-                    return
-                self.load_capture()
+                pre, body = self.split_source(self.source)
+                fast_ok = False
+                if pre == self.preamble:
+                    # fast repagination: body-only re-typeset in a warm
+                    # preamble-resident engine (used once, then replaced)
+                    (DIR / f"{STEM}-body.tex").write_text(body)
+                    out = DIR / f"{STEM}-conv-capture.json"
+                    eng = self.take_conv_engine()
+                    r = eng.run(f"{STEM}-body.tex", out.name,
+                                f"{STEM}-live.aux")
+                    eng.kill()
+                    self.prewarm_async()
+                    if "ms" in r:
+                        self.load_capture(out)
+                        fast_ok = True
+                        self.last_conv_s = round(
+                            time.perf_counter() - t0, 2)
+                        print(f"[{STEM}] converged rev {self.rev + 1} in "
+                              f"{self.last_conv_s} s (warm engine, "
+                              f"body {r['ms']:.0f} ms)")
+                    else:
+                        print(f"[{STEM}] warm engine failed "
+                              f"({r.get('err')}); falling back")
+                else:
+                    # preamble edited: engines hold a stale preamble
+                    print(f"[{STEM}] preamble changed: full compile + "
+                          "engine respawn")
+                if not fast_ok:
+                    (DIR / f"{STEM}-live.tex").write_text(
+                        with_rtcapture(self.source))
+                    r2 = self.compile_tex(f"{STEM}-live.tex")
+                    if "RTCAPTURE: wrote" not in r2.stdout:
+                        errs = [l for l in r2.stdout.splitlines()
+                                if l.startswith("!")]
+                        self.conv_error = (errs[0] if errs
+                                           else "compile produced no capture")
+                        print(f"[{STEM}] convergence FAILED: "
+                              f"{self.conv_error}")
+                        return
+                    self.load_capture()
+                    if pre != self.preamble:
+                        self.preamble = pre
+                        if self.conv_engine:
+                            self.conv_engine.kill()
+                            self.conv_engine = None
+                        self.prewarm_async()
+                        self.write_serve()
+                        with self.lock:
+                            self.respawn()
+                    self.last_conv_s = round(time.perf_counter() - t0, 2)
+                    print(f"[{STEM}] converged rev {self.rev + 1} in "
+                          f"{self.last_conv_s} s (full compile)")
                 self.rev += 1
-                self.last_conv_s = round(time.perf_counter() - t0, 2)
-                print(f"[{STEM}] converged rev {self.rev} in "
-                      f"{self.last_conv_s} s")
             finally:
                 self.converging = False
 
