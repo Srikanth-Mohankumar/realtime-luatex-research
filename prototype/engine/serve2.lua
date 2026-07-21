@@ -124,15 +124,19 @@ function SERVE_ONE()
   end
   REQ = req
   T0 = os.gettimeofday()
-  tex.sprint("\\setbox0=\\vbox{" .. prologue(req.ctx) .. " " .. req.text
-             .. "\\par}\\directlua{RESPOND()}")
+  -- three separate lines (tex.print, not sprint): a stray % in user text
+  -- then only eats to the end of ITS line, not the closing \par}\directlua
+  tex.print("\\setbox0=\\vbox{" .. prologue(req.ctx) .. "%",
+            req.text,
+            "\\par}\\directlua{RESPOND()}")
 end
 
 function RESPOND()
   local box = tex.box[0]
   local lines = sig.vlist_sig(box.head)
   local ms = (os.gettimeofday() - T0) * 1000
-  io.write(string.format('{"ms":%.3f,"sig":%s}\n', ms, sig.sig_json(lines)))
+  io.write(string.format('{"ms":%.3f,"fonts":%s,"sig":%s}\n',
+                         ms, sig.fonts_json(lines), sig.sig_json(lines)))
   io.flush()
   tex.box[0] = nil  -- frees the box and its list; lwc lesson (notes/04): free or leak
 end

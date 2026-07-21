@@ -42,6 +42,31 @@ via fontspec), and **cas-dc** (Elsevier CAS double-column).
 Run: `python3 client/rtclient.py templates/<name>` (compiles the sample
 itself; needs TeX Live 2025 with the class installed).
 
+## Interactive demo
+
+```
+cd prototype/demo && python3 server.py      # then open http://localhost:8123
+```
+
+`demo/server.py` (stdlib only) bridges a browser page to the persistent
+engines — one lualatex process per template, spawned on first use. The page
+shows the article body on the left (editable source per paragraph) and the
+typeset column on the right, rendered as SVG from the engine's display
+lists. **Every keystroke round-trips through real LuaTeX**: the edited
+paragraph is re-broken with its captured context and repositioned
+glyph-by-glyph; paragraphs below re-stack; the HUD shows in-engine time,
+bridge round-trip, and browser total. Unedited paragraphs render from the
+full compile's cached reference signatures — the background-convergence
+overlay pattern in miniature.
+
+Honesty note: glyph *positions* are engine-exact scaled points; glyph
+*outlines* use the browser's serif font as a stand-in (pixel-true outlines
+would need the actual font files shipped to the page à la texlode's
+opentype.js renderer — Type1 `.pfb` fonts used by these classes can't be
+loaded by opentype.js directly). Mid-edit input is survivable: the bridge
+strips comments, balances `$`/braces, and a 10 s watchdog respawns a wedged
+engine (⟳ button forces it).
+
 ## Results (2026-07-21, LuaHBTeX 1.22.0, TeX Live 2025, Linux)
 
 12 marked body paragraphs per template; fidelity = fast-path recompile

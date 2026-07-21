@@ -20,7 +20,7 @@ local function walk(head, x0, set, sign, order, out)
     local adv = node.dimensions(set, sign, order, n, n.next)
     local id = n.id
     if id == GLYPH then
-      out[#out + 1] = { n.char, x }
+      out[#out + 1] = { n.char, x, n.font }
     elseif id == DISC then
       if n.replace then walk(n.replace, x, set, sign, order, out) end
     elseif id == HLIST then
@@ -45,16 +45,30 @@ function M.line_sig(line)
 end
 
 -- signature of every hlist in a vertical list (post_linebreak head, or a
--- vbox's .head): one entry per line box
-function M.vlist_sig(head)
+-- vbox's .head): one entry per line box, with baseline y accumulated from
+-- line heights/depths and inter-line glue/kerns (glue at natural width:
+-- both sources we walk — post_linebreak lists and natural-height vboxes —
+-- have unset interline glue)
+function M.vlist_sig(head, y0)
   local lines = {}
+  local y = y0 or 0
   for n in node.traverse(head) do
     if n.id == HLIST then
-      lines[#lines + 1] = M.line_sig(n)
+      local l = M.line_sig(n)
+      l.y = y + n.height          -- baseline position
+      lines[#lines + 1] = l
+      y = y + n.height + n.depth
     elseif n.id == VLIST then
       -- e.g. display-math or nested vbox: recurse so structure is visible
-      local inner = M.vlist_sig(n.head)
+      local inner = M.vlist_sig(n.head, y)
       for _, l in ipairs(inner) do lines[#lines + 1] = l end
+      y = y + n.height + n.depth
+    elseif n.id == node.id("glue") then
+      y = y + n.width
+    elseif n.id == node.id("kern") then
+      y = y + n.kern
+    elseif n.id == node.id("rule") then
+      y = y + n.height + n.depth
     end
   end
   return lines
@@ -66,13 +80,30 @@ function M.sig_json(lines)
   for _, l in ipairs(lines) do
     local gparts = {}
     for _, gl in ipairs(l.g) do
-      gparts[#gparts + 1] = string.format("[%d,%d]", gl[1], gl[2])
+      gparts[#gparts + 1] = string.format("[%d,%d,%d]", gl[1], gl[2], gl[3] or 0)
     end
     lparts[#lparts + 1] = string.format(
-      '{"w":%d,"h":%d,"d":%d,"g":[%s]}',
-      l.w, l.h, l.d, table.concat(gparts, ","))
+      '{"w":%d,"h":%d,"d":%d,"y":%d,"g":[%s]}',
+      l.w, l.h, l.d, l.y or 0, table.concat(gparts, ","))
   end
   return "[" .. table.concat(lparts, ",") .. "]"
+end
+
+-- font table for every font id referenced by a signature: id -> name, size
+function M.fonts_json(lines)
+  local seen, parts = {}, {}
+  for _, l in ipairs(lines) do
+    for _, gl in ipairs(l.g) do
+      local id = gl[3]
+      if id and id ~= 0 and not seen[id] then
+        seen[id] = true
+        local f = font.getfont(id) or font.fonts[id] or {}
+        parts[#parts + 1] = string.format('"%d":{"name":%q,"size":%d}',
+          id, f.name or "", f.size or 655360)
+      end
+    end
+  end
+  return "{" .. table.concat(parts, ",") .. "}"
 end
 
 return M
