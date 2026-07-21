@@ -167,6 +167,63 @@ class Doc:
         self.pool_target = 2
         self.pool.append(ConvEngine(self.preamble))
         self.prewarm_async()
+        self.start_watcher()
+
+    # ---- supporting-file watcher ----
+    # The template reads satellite.json (float placement/dimensions) at
+    # BODY time (activated after \maketitle — verified), so single-shot
+    # convergence engines pick up its current content on every run. This
+    # watcher makes edits to supporting files trigger repagination on
+    # their own. Extra globs via RT_WATCH=... (comma separated); set
+    # RT_WATCH_PREAMBLE=1 if a template reads watched files at preamble
+    # time (drains the warm pool on change).
+    def start_watcher(self):
+        import glob as globlib
+        globs = ["satellite.json"] + [
+            g for g in os.environ.get("RT_WATCH", "").split(",") if g]
+        drain = os.environ.get("RT_WATCH_PREAMBLE") == "1"
+
+        def snap():
+            m = {}
+            for g in globs:
+                for f in globlib.glob(str(DIR / g)):
+                    try:
+                        m[f] = os.path.getmtime(f)
+                    except OSError:
+                        pass
+            return m
+
+        self._watch = snap()
+        if self._watch:
+            print(f"[{STEM}] watching supporting files: "
+                  + ", ".join(Path(f).name for f in self._watch))
+
+        def loop():
+            while True:
+                time.sleep(1.0)
+                if self.converging:
+                    self._watch = snap()   # ignore our own runs' writes
+                    continue
+                cur = snap()
+                if cur != self._watch:
+                    names = {Path(f).name
+                             for f in set(cur) ^ set(self._watch)} | \
+                            {Path(f).name for f in cur
+                             if f in self._watch and cur[f] != self._watch[f]}
+                    self._watch = cur
+                    print(f"[{STEM}] supporting file changed "
+                          f"({', '.join(sorted(names))}): repaginating")
+                    if drain:
+                        self.drain_pool()
+                        self.prewarm_async()
+                    self.last_stable = False
+                    if self.conv_timer:
+                        self.conv_timer.cancel()
+                    self.conv_timer = threading.Timer(0.2, self.converge)
+                    self.conv_timer.daemon = True
+                    self.conv_timer.start()
+
+        threading.Thread(target=loop, daemon=True).start()
 
     def take_conv_engine(self):
         with self.pool_lock:

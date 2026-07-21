@@ -345,6 +345,18 @@ function onEdit() {
   });
   $('restart').addEventListener('click', () => j('/api/restart', {}));
   renderPages();
+  // idle poll: repaginations triggered outside the editor (supporting-file
+  // watcher, other clients) re-render without a local edit
+  setInterval(async () => {
+    if (polling) return;
+    const s = await j('/api/rev');
+    if (s.rev !== DOC.rev && !s.converging) {
+      DOC = await j('/api/doc');
+      clearOverlays();
+      renderPages();
+      $('h-rev').textContent = DOC.rev;
+    }
+  }, 3000);
 })();
 </script>
 </body>
