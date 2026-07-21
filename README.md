@@ -6,10 +6,15 @@ Recompiling Large Documents in 1 ms"* (the `texlode` system). Goal: understand
 the relevant TeX/LuaTeX internals deeply enough to build the same
 architecture, and verify the paper's claims by replication.
 
-**Status (2026-07-21): every quantitative claim we tested replicates, and the
+**Status (2026-07-21): every quantitative claim we tested replicates; the
 full fast path (persistent engine → per-paragraph compile → node-structure
 display-list extraction → IPC) is reproduced end-to-end in
-[experiments/04](experiments/04-persistent-engine/) at 0.4–2.5 ms round-trip.**
+[experiments/04](experiments/04-persistent-engine/) at 0.4–2.5 ms round-trip;
+and a working [prototype](prototype/) with context capture + injection is
+verified against four production journal classes (elsarticle, IEEEtran,
+acmart, cas-dc): 10/12 body paragraphs byte-exact (0 sp) per template at
+1.6–3.3 ms, the other 2 being the predicted footnote/display-math locality
+boundaries.**
 
 ## The idea in three lines
 
@@ -37,6 +42,7 @@ display-list extraction → IPC) is reproduced end-to-end in
 | [experiments/02-node-dump/](experiments/02-node-dump/) | Node-list dumps: what a paragraph looks like after line breaking |
 | [experiments/03-display-list-extraction/](experiments/03-display-list-extraction/) | Positioned-glyph extraction from node structures, engine-exact under microtype (≤4 sp) |
 | [experiments/04-persistent-engine/](experiments/04-persistent-engine/) | Persistent LuaTeX paragraph server + client: paper Table 3 replication |
+| [prototype/](prototype/) | **Working prototype**: context capture + injection, tested on elsarticle / IEEEtran / acmart / cas-dc — 10/12 paragraphs byte-exact per template |
 | [sources/](sources/) | The preprint, TUGboat PDFs, monoref docs, cloned `luatex-benchmark` (gitignored) |
 
 ## Replication scorecard (LuaHBTeX 1.22.0, TeX Live 2025, Linux)
