@@ -148,8 +148,20 @@ function renderPages() {
       t.textContent = glyphChar(c, fname);
       parent.appendChild(t);
     }
-    for (const [x, y, w, h] of pg.r)
-      svg.appendChild(el('rect', {x:px(x), y:px(y), width:px(w), height:Math.max(px(h),0.75), fill:'#111'}));
+    for (const [x, y, w, h, st] of pg.r) {
+      if (st === 2) {           // image rule: outlined placeholder
+        svg.appendChild(el('rect', {x:px(x), y:px(y), width:px(w),
+          height:Math.max(px(h),0.75), fill:'#f1ede4', stroke:'#b5ad9d',
+          'stroke-width':1, 'stroke-dasharray':'4 3'}));
+        const t = el('text', {x:px(x)+6, y:px(y)+14, 'font-size':11,
+          'font-family':'system-ui', fill:'#8a8271'});
+        t.textContent = 'figure';
+        svg.appendChild(t);
+      } else {
+        svg.appendChild(el('rect', {x:px(x), y:px(y), width:px(w),
+          height:Math.max(px(h),0.75), fill:'#111'}));
+      }
+    }
     cont.appendChild(svg);
   });
 }

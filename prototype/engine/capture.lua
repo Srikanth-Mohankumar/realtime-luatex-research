@@ -173,8 +173,11 @@ local function hwalk_abs(head, x, y, set, sign, order, out)
       vwalk_abs(n.head, x, y + n.shift - n.height,
                 n.glue_set, n.glue_sign, n.glue_order, out)
     elseif id == RULE then
+      -- subtype 2 = image (LuaTeX represents \includegraphics as an image
+      -- rule); the renderer draws those as placeholders, not solid rules
       if n.width > 0 and n.width < 1073741824 then
-        out.r[#out.r + 1] = { x, y - n.height, n.width, n.height + n.depth }
+        out.r[#out.r + 1] = { x, y - n.height, n.width, n.height + n.depth,
+                              n.subtype or 0 }
       end
     end
     x = x + adv
@@ -210,7 +213,8 @@ vwalk_abs = function(head, x, y, set, sign, order, out)
       y = y + n.height + n.depth
     elseif id == RULE then
       if n.width > 0 and n.width < 1073741824 then
-        out.r[#out.r + 1] = { x, y, n.width, n.height + n.depth }
+        out.r[#out.r + 1] = { x, y, n.width, n.height + n.depth,
+                              n.subtype or 0 }
       end
       y = y + n.height + n.depth
     elseif id == GLUE then
@@ -319,7 +323,8 @@ function M.finish(path)
       gp[#gp + 1] = string.format("[%d,%d,%d,%d,%d]", g[1], I(g[2]), I(g[3]), g[4], g[5])
     end
     for _, r in ipairs(pg.r) do
-      rp[#rp + 1] = string.format("[%d,%d,%d,%d]", I(r[1]), I(r[2]), I(r[3]), I(r[4]))
+      rp[#rp + 1] = string.format("[%d,%d,%d,%d,%d]",
+        I(r[1]), I(r[2]), I(r[3]), I(r[4]), r[5] or 0)
     end
     pparts[#pparts + 1] = string.format(
       '{"w":%d,"h":%d,"g":[%s],"r":[%s]}',

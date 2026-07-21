@@ -70,11 +70,16 @@ def with_rtcapture(source):
 
 
 class ConvEngine:
-    """Persistent convergence engine: preamble loaded once, body re-typeset
-    in-session per request (converge-loop.lua). Runs in --draftmode: shipout
-    callbacks fire (so the capture is produced) but no PDF is written."""
+    """Convergence engine: preamble loaded once, body typeset on request
+    (converge-loop.lua). Runs in --draftmode: shipout callbacks fire (so
+    the capture is produced) but no PDF is written. Used SINGLE-SHOT; a
+    unique jobname keeps concurrent engines' log/aux files apart."""
+
+    _seq = 0
 
     def __init__(self, preamble):
+        ConvEngine._seq += 1
+        self.jobname = f"{STEM}-conv{ConvEngine._seq}"
         (DIR / f"{STEM}-conv.tex").write_text(
             preamble + "\\usepackage{rtcapture}\n\\begin{document}\n"
             "\\directlua{dofile(\""
@@ -85,7 +90,7 @@ class ConvEngine:
         t0 = time.perf_counter()
         self.proc = subprocess.Popen(
             ["lualatex", "--draftmode", "-interaction=nonstopmode",
-             f"{STEM}-conv.tex"],
+             f"-jobname={self.jobname}", f"{STEM}-conv.tex"],
             cwd=DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             text=True, bufsize=1, env=ENV)
         for line in self.proc.stdout:
@@ -154,23 +159,45 @@ class Doc:
         # production template's float machinery leaks state across body
         # re-runs (run 2 lost the figure pages). Each engine is used for
         # exactly one repagination — guaranteed first-run semantics, which
-        # we verified byte-identical to a fresh compile — and a warm
-        # replacement is spawned in the background right away.
-        self.conv_engine = ConvEngine(self.preamble)
+        # we verified byte-identical to a fresh compile. A POOL of warm
+        # engines absorbs bursts of structural edits; refills happen in
+        # the background off the critical path.
+        self.pool = []
+        self.pool_lock = threading.Lock()
+        self.pool_target = 2
+        self.pool.append(ConvEngine(self.preamble))
+        self.prewarm_async()
 
     def take_conv_engine(self):
-        eng, self.conv_engine = self.conv_engine, None
-        if eng is None:
-            print(f"[{STEM}] no warm engine (rapid edits): paying preamble")
-            eng = ConvEngine(self.preamble)
-        return eng
+        with self.pool_lock:
+            if self.pool:
+                return self.pool.pop()
+        print(f"[{STEM}] no warm engine (edit burst): paying preamble")
+        return ConvEngine(self.preamble)
+
+    def drain_pool(self):
+        with self.pool_lock:
+            engines, self.pool = self.pool, []
+        for e in engines:
+            e.kill()
 
     def prewarm_async(self):
         def work():
-            try:
-                self.conv_engine = ConvEngine(self.preamble)
-            except Exception as e:
-                print(f"[{STEM}] prewarm failed: {e}")
+            while True:
+                with self.pool_lock:
+                    if len(self.pool) >= self.pool_target:
+                        return
+                    pre = self.preamble
+                try:
+                    eng = ConvEngine(pre)
+                except Exception as e:
+                    print(f"[{STEM}] prewarm failed: {e}")
+                    return
+                with self.pool_lock:
+                    if pre == self.preamble:
+                        self.pool.append(eng)
+                    else:
+                        eng.kill()   # preamble changed while warming
         threading.Thread(target=work, daemon=True).start()
 
     @staticmethod
@@ -381,9 +408,7 @@ class Doc:
                     self.load_capture()
                     if pre != self.preamble:
                         self.preamble = pre
-                        if self.conv_engine:
-                            self.conv_engine.kill()
-                            self.conv_engine = None
+                        self.drain_pool()
                         self.prewarm_async()
                         self.write_serve()
                         with self.lock:
