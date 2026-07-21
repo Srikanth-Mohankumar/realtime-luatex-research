@@ -122,10 +122,10 @@ def compare(ref, fast):
 
 
 class Server:
-    def __init__(self, tpl_dir):
+    def __init__(self, tpl_dir, texfile="server.tex"):
         t0 = time.perf_counter()
         self.proc = subprocess.Popen(
-            ["lualatex", "-interaction=nonstopmode", "server.tex"],
+            ["lualatex", "-interaction=nonstopmode", texfile],
             cwd=tpl_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             text=True, bufsize=1)
         for line in self.proc.stdout:

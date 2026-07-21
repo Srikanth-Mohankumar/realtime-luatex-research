@@ -1,0 +1,214 @@
+\documentclass[journal]{IEEEtran}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{booktabs}
+
+\begin{document}
+
+\title{Paragraph-Local Recompilation for Interactive
+Editing of \LaTeX{} Journal Manuscripts}
+
+\author{A.~Author,~B.~Author,~and~C.~Author%
+\thanks{The authors are with the Institute for Typesetting Research,
+Chennai, India (e-mail: authors@typesetting-research.example).}%
+\thanks{Manuscript received July 21, 2026.}}
+
+\markboth{Journal of Document Engineering, Vol.~1, No.~1, July~2026}%
+{Author \MakeLowercase{\textit{et al.}}: Paragraph-Local Recompilation}
+
+\maketitle
+
+\begin{abstract}
+Interactive editing of large \LaTeX{} manuscripts is limited by
+whole-document compilation, whose latency grows with document length and
+preamble complexity. We show that the unit of recompilation can instead be
+the paragraph: line breaking is a pure function of paragraph content and a
+finite parameter context, so an edited paragraph can be re-typeset in
+isolation in one to three milliseconds inside a persistent engine, while a
+background pass reconverges global layout. We describe the required context
+capture, measure fidelity and latency on production journal classes, and
+demonstrate a browser-based editor whose keystroke path runs two orders of
+magnitude inside the interactive frame budget.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Typesetting, line breaking, real-time systems, document engineering.
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+\IEEEPARstart{A}{utomated} typesetting systems have historically treated
+document compilation as a monolithic operation: source files enter, a
+complete rendered document leaves. This architecture, inherited from the
+batch environments of the nineteen-seventies, imposes a latency floor on
+interactive editing that grows linearly with document length and with the
+severity of the preamble.
+
+The line-breaking problem, by contrast, is intrinsically local. Given a
+fixed measure and a fixed sequence of boxes, glue, and penalties, the
+optimal arrangement of breakpoints depends on nothing outside the paragraph
+itself. This observation, implicit in the dynamic programming formulation
+of the classical algorithm, suggests that the unit of interactive
+recompilation should be the paragraph rather than the document.
+
+Word processors have exploited exactly this separation for decades: the
+paragraph under the cursor is re-flowed on every keystroke, while
+pagination, running heads, and cross-references converge in a background
+process. What has been missing is not an algorithm but an engineering
+bridge that brings the same interaction model to a batch typesetting
+engine without sacrificing its output quality.
+
+This paper contributes such a bridge. We capture, for every paragraph of a
+real journal manuscript, the complete parameter context consumed by the
+line breaker; we keep a persistent engine alive so that the preamble is
+paid for once; and we verify, glyph by glyph, that isolated recompilation
+reproduces the reference document exactly.
+
+\section{The Locality Property}
+
+Consider a paragraph consisting of $n$ items with natural widths $w_i$,
+stretchability $y_i$, and shrinkability $z_i$. The adjustment ratio of a
+candidate line is $r = (L - W)/Y$ when the line must stretch, where $L$ is
+the target measure, $W$ the accumulated natural width, and $Y$ the
+accumulated stretchability. The badness of setting the line is
+approximately $100\,|r|^3$, capped at ten thousand.
+
+The total demerits of a breakpoint sequence combine badness with penalty
+terms,
+\begin{equation}
+D = \sum_{j} \bigl( l + \beta_j \bigr)^2 + \pi_j^2 + \delta_j,
+\label{eq:demerits}
+\end{equation}
+where $l$ is the line penalty, $\beta_j$ the badness of line $j$, $\pi_j$
+any explicit penalty at the chosen breakpoint, and $\delta_j$ the adjacency
+demerits charged when consecutive lines differ excessively in tightness.
+
+Equation~\eqref{eq:demerits} is minimized by dynamic programming over
+feasible breakpoints, and the minimizing sequence is unique for practical
+parameter settings. The consequence relevant to interactive systems is
+determinism: recompiling an unchanged paragraph reproduces byte-identical
+line boxes, and recompiling an edited paragraph perturbs no other
+paragraph in the document.
+
+The dependency set of the line breaker is finite and enumerable: the
+measure, the paragraph shape, the fonts active at paragraph start, the
+hyphenation language, the tolerance and emergency stretch, the penalty and
+demerit parameters, and the interword skip overrides. We refer to this
+collection as the paragraph's \emph{context}. If the context is captured
+during a reference compilation and reinjected around an isolated
+recompilation, the reproduction is exact.
+
+\section{System Architecture}
+
+Our prototype comprises four cooperating components.
+
+First, a capture pass instruments a normal compilation. Callbacks around
+the line breaker record each paragraph's context together with a reference
+signature: the width, height, and depth of every line box and the exact
+position of every glyph within it, expressed in scaled points, of which
+there are $65{,}536$ to the printer's point\footnote{All measurements in
+this paper were taken with LuaHBTeX 1.22.0 from \TeX{} Live 2025 on a
+commodity Linux workstation.}.
+
+Second, a persistent engine loads the journal class preamble once and then
+services recompilation requests indefinitely. Each request supplies the
+edited source of one paragraph together with its captured context, which
+the server reinstates before re-running the paragraph builder; the
+response carries positioned glyphs extracted directly from the engine's
+node structures, bypassing page generation entirely.
+
+Third, cross-reference state is transplanted from the reference
+compilation's auxiliary file, so that citations and references inside an
+isolated paragraph resolve to their converged values rather than to
+placeholder marks.
+
+Fourth, a background convergence pass recompiles the full document a short
+interval after the last edit, refreshing the cached page geometry against
+which live paragraphs are overlaid. Pagination, floats, and running heads
+are therefore eventually consistent, in the same sense a word processor's
+layout is.
+
+\section{Evaluation}
+
+We evaluate fidelity and latency on the journal class of this very
+manuscript. Fidelity is judged by the strictest available criterion: the
+recompiled paragraph must reproduce the reference line breaks and every
+glyph position to zero scaled points, with full character protrusion and
+font expansion active.
+
+Across the body paragraphs of the test manuscript, isolated recompilation
+is exact wherever the paragraph does not couple to global state. The
+exceptions are principled rather than accidental: a footnote couples its
+paragraph to the page builder through the insertion mechanism, and a
+displayed equation splits its paragraph into partial paragraphs whose
+shapes depend on the display. Both cases are detectable by inspection of
+the node list and are routed to the convergence path.
+
+Latency is summarized in Table~\ref{tab:latency}. The keystroke path
+completes in single-digit milliseconds, roughly two orders of magnitude
+inside the hundred-millisecond threshold at which interfaces are judged
+instantaneous, and comfortably inside a sixty-hertz display frame.
+
+\begin{table}[!t]
+\caption{Measured Latency of the Keystroke Path\label{tab:latency}}
+\centering
+\begin{tabular}{lcc}
+\toprule
+Stage & Short para. & Medium para. \\
+\midrule
+Line break + traversal & 0.3\,ms & 2.0\,ms \\
+Interprocess transport & 0.2\,ms & 0.5\,ms \\
+Full round trip & 0.5\,ms & 2.5\,ms \\
+Full document compile & \multicolumn{2}{c}{900\,ms} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The comparison with whole-document recompilation is stark. Even this
+modest manuscript costs nearly a second per compile; a book-length
+document costs tens of seconds. The per-paragraph path is independent of
+document length by construction, so the advantage widens without bound as
+the document grows.
+
+Memory behavior is equally important for a long-lived engine. Every
+recompiled paragraph allocates node lists that must be freed
+deterministically; our server frees the working box after each response,
+and five hundred consecutive recompilations show no drift in either
+latency or engine memory.
+
+\section{Limitations and Future Work}
+
+Three limitations bound the present prototype. Paragraphs inside list
+environments receive their labels from the enclosing environment rather
+than from their own source, so label glyphs are absent from isolated
+recompiles. Global assignments in body text can leak between requests in a
+long-lived engine; checkpointing would make isolation airtight. And
+mid-edit source is frequently ill-formed, which the server survives by
+sanitizing input and respawning on the rare wedge, but a production system
+would maintain an incremental parse of the manuscript instead.
+
+The natural next step is source mapping: deriving paragraph identity from
+an editor's document model rather than from markers, so that any existing
+manuscript can be edited live without preparation. The capture and replay
+machinery described here is unchanged by that step.
+
+\section{Conclusion}
+
+Pixel-identical \LaTeX{} output and millisecond editing feedback are not
+in tension. The line breaker that produces the former has always been fast
+enough for the latter; what was required was to stop asking it to
+recompile entire documents. A paragraph-local fast path with background
+convergence brings the interaction model of word processors to batch
+typesetting without compromising its typography.
+
+\begin{thebibliography}{9}
+\bibitem{knuthplass} D.~E. Knuth and M.~F. Plass, ``Breaking paragraphs
+into lines,'' \emph{Software---Practice and Experience}, vol.~11, no.~11,
+pp. 1119--1184, 1981.
+\bibitem{lode} C.~Lode, ``Real-time Lua\TeX: recompiling large documents
+in 1\,ms,'' \emph{TUGboat}, 2026, preprint.
+\bibitem{bour} F.~Bour, ``TeXpresso: live rendering and error reporting
+for \LaTeX,'' \emph{TUGboat}, vol.~44, no.~2, pp. 185--192, 2023.
+\end{thebibliography}
+
+\end{document}

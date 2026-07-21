@@ -36,7 +36,7 @@
 <body>
 <header>
   <h1>Real-Time LuaTeX</h1>
-  <select id="tpl"></select>
+  <span id="docname" style="opacity:.8"></span>
   <button id="restart" title="respawn the engine if wedged">&#10227; engine</button>
   <div class="hud">
     <span>engine <b id="h-eng">–</b> ms</span>
@@ -63,11 +63,22 @@
 const SP = 65536, PXPT = 96/72.27;
 let ZOOM = 1.15;
 const px = sp => sp / SP * PXPT * ZOOM;
+// Char-code -> Unicode by FONT ENCODING: TFM math fonts use OML/OMS/OMX
+// slots, text fonts use T1 ligature slots. Approximate maps for display.
 const T1 = {11:'ff',12:'fi',13:'fl',14:'ffi',15:'ffl',25:'ı',26:'ȷ',27:'ff',28:'fi',29:'fl',30:'ffi',31:'ffl'};
-const chr = c => c >= 32 ? String.fromCodePoint(c) : (T1[c] || '·');
+const OML = {11:'α',12:'β',13:'γ',14:'δ',15:'ε',16:'ζ',17:'η',18:'θ',19:'ι',20:'κ',21:'λ',22:'μ',23:'ν',24:'ξ',25:'π',26:'ρ',27:'σ',28:'τ',29:'υ',30:'φ',31:'χ',32:'ψ',33:'ω',96:'ℓ',64:'∂'};
+const OMS = {0:'−',1:'·',2:'×',3:'∗',6:'±',15:'•',20:'≤',21:'≥',24:'∼',25:'≈',33:'→',102:'{',103:'}',112:'√'};
+const OMX = {80:'∑',81:'∏',82:'∫',88:'∑',89:'∏',90:'∫'};
+function glyphChar(c, fname) {
+  if (/cmmi|lmmi|txmi|rsfs/.test(fname)) return OML[c] || String.fromCodePoint(c);
+  if (/cmsy|lmsy|txsy/.test(fname))      return OMS[c] || String.fromCodePoint(Math.max(c,32));
+  if (/cmex|lmex|txex/.test(fname))      return OMX[c] || '·';
+  return c >= 32 ? String.fromCodePoint(c) : (T1[c] || '·');
+}
+const mathItalic = fname => /cmmi|lmmi|txmi/.test(fname);
 const NS = 'http://www.w3.org/2000/svg';
 
-let DOC = null, tpl = null, inflight = false, dirty = null, polling = false;
+let DOC = null, inflight = false, dirty = null, polling = false;
 
 const $ = id => document.getElementById(id);
 async function j(url, body) {
@@ -105,9 +116,11 @@ function renderPages() {
         parent = attrG[a];
         if (!DOC._origin[a]) DOC._origin[a] = {page: pi, x, y};  // first glyph in reading order
       }
+      const fname = (DOC.fonts[String(f)] || {}).name || '';
       const t = el('text', {x:px(x), y:px(y), 'font-size':fontSize(f),
                             'font-family':'Georgia, "Times New Roman", serif'});
-      t.textContent = chr(c);
+      if (mathItalic(fname)) t.setAttribute('font-style', 'italic');
+      t.textContent = glyphChar(c, fname);
       parent.appendChild(t);
     }
     for (const [x, y, w, h] of pg.r)
@@ -136,10 +149,12 @@ function overlay(pid, sig, fonts) {
   for (const line of sig) {
     for (const [c, x, f] of line.g) {
       const info = fonts && fonts[String(f)];
+      const fname = info ? info.name : '';
       const t = el('text', {x:px(x0 + x), y:px(y0 + line.y),
                             'font-size': info ? px(info.size) : fontSize(0),
                             'font-family':'Georgia, "Times New Roman", serif'});
-      t.textContent = chr(c);
+      if (mathItalic(fname)) t.setAttribute('font-style', 'italic');
+      t.textContent = glyphChar(c, fname);
       ov.appendChild(t);
     }
   }
@@ -156,7 +171,7 @@ async function compile(p, text) {
   if (inflight) { dirty = [p, text]; return; }
   inflight = true;
   const t0 = performance.now();
-  const resp = await j('/api/compile', {template: tpl, id: p.id, text});
+  const resp = await j('/api/compile', {id: p.id, text});
   inflight = false;
   const tag = document.querySelector(`#p${p.id} .stat`);
   if (resp.error) {
@@ -180,9 +195,9 @@ async function pollConvergence() {
   badge.firstChild.textContent = 'converging… rev ';
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 700));
-    const s = await j('/api/rev?template=' + tpl);
+    const s = await j('/api/rev');
     if (s.rev !== DOC.rev && !s.converging) {
-      DOC = await j('/api/doc?template=' + tpl);
+      DOC = await j('/api/doc');
       clearOverlays();
       renderPages();
       $('h-rev').textContent = DOC.rev;
@@ -214,27 +229,14 @@ function buildEditor() {
   }
 }
 
-async function loadTemplate(name) {
-  tpl = name;
-  $('editor').innerHTML = '<p style="color:#777">spawning engine + loading document…</p>';
-  $('pages').innerHTML = '';
-  DOC = await j('/api/doc?template=' + name);
+(async () => {
+  $('editor').innerHTML = '<p style="color:#777">loading document…</p>';
+  DOC = await j('/api/doc');
+  $('docname').textContent = DOC.name;
   $('h-rev').textContent = DOC.rev;
+  $('restart').addEventListener('click', () => j('/api/restart', {}));
   buildEditor();
   renderPages();
-}
-
-(async () => {
-  const names = await j('/api/templates');
-  const sel = $('tpl');
-  for (const n of names) {
-    const o = document.createElement('option');
-    o.value = o.textContent = n;
-    sel.appendChild(o);
-  }
-  sel.addEventListener('change', () => loadTemplate(sel.value));
-  $('restart').addEventListener('click', () => j('/api/restart', {template: tpl}));
-  await loadTemplate(names[0]);
 })();
 </script>
 </body>

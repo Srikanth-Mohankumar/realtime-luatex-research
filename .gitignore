@@ -13,3 +13,6 @@ __pycache__/
 *.toc
 prototype/templates/*/body-live.tex
 prototype/templates/*/sample-live*
+prototype/templates/*/article-marked.*
+prototype/templates/*/article-live.*
+prototype/templates/*/article-serve.*

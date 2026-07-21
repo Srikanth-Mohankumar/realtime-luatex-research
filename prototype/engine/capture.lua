@@ -155,23 +155,43 @@ local function hwalk_abs(head, x, y, set, sign, order, out)
   end
 end
 
--- y is the TOP edge of the vertical material
+-- resolved width of vertical glue under the parent box's glue setting
+local function vglue(g, set, sign, order)
+  local w = g.width
+  if sign == 1 and g.stretch_order == order then
+    w = w + set * g.stretch
+  elseif sign == 2 and g.shrink_order == order then
+    w = w - set * g.shrink
+  end
+  return w
+end
+
+-- y is the TOP edge of the vertical material. NOTE: node.dimensions()
+-- measures HORIZONTAL spans and must not be used here — vertical advance
+-- is height+depth for boxes/rules, resolved width for glue, kern for
+-- kerns (learned the hard way: pages rendered with everything at the
+-- bottom because glue/box advances were nonsense).
 vwalk_abs = function(head, x, y, set, sign, order, out)
   for n in node.traverse(head) do
-    local adv = node.dimensions(set, sign, order, n, n.next)
     local id = n.id
     if id == HLIST then
       hwalk_abs(n.head, x + n.shift, y + n.height,
                 n.glue_set, n.glue_sign, n.glue_order, out)
+      y = y + n.height + n.depth
     elseif id == VLIST then
       vwalk_abs(n.head, x + n.shift, y,
                 n.glue_set, n.glue_sign, n.glue_order, out)
+      y = y + n.height + n.depth
     elseif id == RULE then
       if n.width > 0 and n.width < 1073741824 then
         out.r[#out.r + 1] = { x, y, n.width, n.height + n.depth }
       end
+      y = y + n.height + n.depth
+    elseif id == GLUE then
+      y = y + vglue(n, set, sign, order)
+    elseif id == KERN then
+      y = y + n.kern
     end
-    y = y + adv
   end
 end
 
@@ -184,15 +204,19 @@ local function on_shipout(head)
   local x0 = IN + tex.hoffset
   local y0 = IN + tex.voffset
   for n in node.traverse(head) do
-    local adv = node.dimensions(0, 0, 0, n, n.next)
     if n.id == HLIST then
       hwalk_abs(n.head, x0 + n.shift, y0 + n.height,
                 n.glue_set, n.glue_sign, n.glue_order, out)
+      y0 = y0 + n.height + n.depth
     elseif n.id == VLIST then
       vwalk_abs(n.head, x0 + n.shift, y0,
                 n.glue_set, n.glue_sign, n.glue_order, out)
+      y0 = y0 + n.height + n.depth
+    elseif n.id == GLUE then
+      y0 = y0 + n.width
+    elseif n.id == KERN then
+      y0 = y0 + n.kern
     end
-    y0 = y0 + adv
   end
   out.w = tex.pagewidth > 0 and tex.pagewidth or 39158276   -- a4 fallback
   out.h = tex.pageheight > 0 and tex.pageheight or 55380996
@@ -251,13 +275,14 @@ function M.finish(path)
   end
   -- pages: absolute display lists from shipout
   local pparts = {}
+  local function I(v) return math.floor(v + 0.5) end  -- glue math yields floats
   for _, pg in ipairs(pages) do
     local gp, rp = {}, {}
     for _, g in ipairs(pg.g) do
-      gp[#gp + 1] = string.format("[%d,%d,%d,%d,%d]", g[1], g[2], g[3], g[4], g[5])
+      gp[#gp + 1] = string.format("[%d,%d,%d,%d,%d]", g[1], I(g[2]), I(g[3]), g[4], g[5])
     end
     for _, r in ipairs(pg.r) do
-      rp[#rp + 1] = string.format("[%d,%d,%d,%d]", r[1], r[2], r[3], r[4])
+      rp[#rp + 1] = string.format("[%d,%d,%d,%d]", I(r[1]), I(r[2]), I(r[3]), I(r[4]))
     end
     pparts[#pparts + 1] = string.format(
       '{"w":%d,"h":%d,"g":[%s],"r":[%s]}',
