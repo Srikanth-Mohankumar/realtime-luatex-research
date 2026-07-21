@@ -45,16 +45,20 @@ itself; needs TeX Live 2025 with the class installed).
 ## Interactive demo
 
 ```
-cd prototype/demo && python3 server.py      # then open http://localhost:8123
+cd prototype/demo && python3 server.py [path/to/your.tex]   # default:
+# templates/ieeetran/article.tex — then open http://localhost:8123
 ```
 
-`demo/server.py` (stdlib only) bridges a browser page to the persistent
-engines — one lualatex process per template, spawned on first use. The page
-shows the article source on the left (editable per paragraph) and the **real
-document pages** on the right: full page display lists captured at shipout
-(`pre_shipout_filter` walk in capture.lua) — title block, abstract,
-two-column body, floats, footnotes, rules — every glyph at its absolute
-page position, keyed by paragraph attribute.
+`demo/server.py` (stdlib only) bridges a browser page to a persistent
+engine for **one real .tex document** — by default a complete IEEEtran
+journal article. The document needs no preparation: prose paragraphs are
+auto-detected (blank-line blocks at environment/brace depth zero) and
+tagged in a generated working copy; the original file is never touched.
+The page shows the article source on the left (editable per paragraph) and
+the **real document pages** on the right: full page display lists captured
+at shipout (`pre_shipout_filter` walk in capture.lua) — running head,
+title block, abstract, two-column body, equations, table, footnotes —
+every glyph at its absolute page position, keyed by paragraph attribute.
 
 Both halves of the architecture run live:
 
