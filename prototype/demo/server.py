@@ -88,8 +88,10 @@ class ConvEngine:
             "\\loop\\directlua{CONV_ONE()}\\ifserving\\repeat\n"
             "\\end{document}\n")
         t0 = time.perf_counter()
+        # no --draftmode: each run also produces the REAL PDF; the trailer
+        # is finalized when the engine QUITs after its single run
         self.proc = subprocess.Popen(
-            ["lualatex", "--draftmode", "-interaction=nonstopmode",
+            ["lualatex", "-interaction=nonstopmode",
              f"-jobname={self.jobname}", f"{STEM}-conv.tex"],
             cwd=DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             text=True, bufsize=1, env=ENV)
@@ -125,6 +127,15 @@ class ConvEngine:
         if t.is_alive():
             box["err"] = "timeout"
         return box
+
+    def quit(self):
+        """Graceful end: \\end{document} runs so the PDF trailer is
+        written and the run's PDF becomes valid."""
+        try:
+            self.proc.stdin.write("QUIT\n")
+            self.proc.stdin.flush()
+        except Exception:
+            pass
 
     def kill(self):
         try:
@@ -168,6 +179,38 @@ class Doc:
         self.pool.append(ConvEngine(self.preamble))
         self.prewarm_async()
         self.start_watcher()
+        # print view: page PNGs of the latest real PDF
+        self.pdf_rev = 0
+        self.png_dir = None
+        self.render_pngs_async(DIR / f"{STEM}-live.pdf", self.rev)
+
+    def render_pngs_async(self, pdfpath, rev, proc=None):
+        """Rasterize a converged PDF's pages for the print view. If proc is
+        given (a quitting engine), wait for it to exit first so the PDF
+        trailer is written."""
+        def work():
+            try:
+                if proc is not None:
+                    proc.wait(timeout=120)
+                if not Path(pdfpath).exists():
+                    return
+                outdir = DIR / f"{STEM}-pngs-r{rev}"
+                outdir.mkdir(exist_ok=True)
+                subprocess.run(
+                    ["pdftoppm", "-png", "-r", "110", str(pdfpath),
+                     str(outdir / "p")],
+                    capture_output=True, timeout=300)
+                old = self.png_dir
+                self.png_dir, self.pdf_rev = outdir, rev
+                print(f"[{STEM}] print view ready for rev {rev}")
+                if old and old != outdir:
+                    import shutil as sh
+                    sh.rmtree(old, ignore_errors=True)
+                if "-conv" in Path(pdfpath).name:
+                    Path(pdfpath).unlink(missing_ok=True)
+            except Exception as e:
+                print(f"[{STEM}] png render failed: {e}")
+        threading.Thread(target=work, daemon=True).start()
 
     # ---- supporting-file watcher ----
     # The template reads satellite.json (float placement/dimensions) at
@@ -433,7 +476,15 @@ class Doc:
                     eng = self.take_conv_engine()
                     r = eng.run(f"{STEM}-body.tex", out.name,
                                 f"{STEM}-live.aux")
-                    eng.kill()
+                    if "ms" in r:
+                        # graceful end finalizes this run's real PDF; the
+                        # print view rasterizes it in the background
+                        eng.quit()
+                        self.render_pngs_async(
+                            DIR / f"{eng.jobname}.pdf", self.rev + 1,
+                            proc=eng.proc)
+                    else:
+                        eng.kill()
                     self.prewarm_async()
                     if "ms" in r:
                         self.load_capture(out)
@@ -473,6 +524,8 @@ class Doc:
                     self.last_conv_s = round(time.perf_counter() - t0, 2)
                     print(f"[{STEM}] converged rev {self.rev + 1} in "
                           f"{self.last_conv_s} s (full compile)")
+                    self.render_pngs_async(DIR / f"{STEM}-live.pdf",
+                                           self.rev + 1)
                 self.rev += 1
             finally:
                 self.converging = False
@@ -507,7 +560,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        route = self.path.split("?", 1)[0]
+        if route in ("/", "/index.html"):
             data = (HERE / "index.html").read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -520,7 +574,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"rev": THE_DOC.rev,
                             "converging": THE_DOC.converging,
                             "conv_s": getattr(THE_DOC, "last_conv_s", None),
+                            "pdf_rev": THE_DOC.pdf_rev,
                             "error": getattr(THE_DOC, "conv_error", None)})
+        elif self.path.startswith("/api/page-image"):
+            q = dict(p.split("=") for p in
+                     self.path.split("?", 1)[1].split("&"))
+            i = int(q["i"])
+            d = THE_DOC.png_dir
+            hit = None
+            if d:
+                for pat in (f"p-{i:02d}.png", f"p-{i:d}.png",
+                            f"p-{i:03d}.png"):
+                    if (d / pat).exists():
+                        hit = d / pat
+                        break
+            if hit:
+                data = hit.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_json({"error": "not ready"}, 404)
         else:
             self.send_json({"error": "not found"}, 404)
 

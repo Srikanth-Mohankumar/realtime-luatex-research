@@ -34,6 +34,7 @@
   <h1>Real-Time LuaTeX</h1>
   <span id="docname" style="opacity:.8"></span>
   <button id="restart" title="respawn the engine if wedged">&#10227; engine</button>
+  <button id="pview" title="show the real typeset PDF pages (latest converged rev) under live overlays">print view</button>
   <div class="hud">
     <span id="curpara">–</span>
     <span>engine <b id="h-eng">–</b> ms</span>
@@ -77,6 +78,8 @@ function glyphChar(c, fname) {
 const mathItalic = fname => /cmmi|lmmi|txmi/.test(fname);
 
 let DOC = null, inflight = false, dirty = null, polling = false, srcTimer = null;
+let printView = new URLSearchParams(location.search).get('print') === '1';
+let pdfRev = 0;
 
 const $ = id => document.getElementById(id);
 async function j(url, body) {
@@ -148,6 +151,11 @@ function renderPages() {
       t.textContent = glyphChar(c, fname);
       parent.appendChild(t);
     }
+    // print view: the real rasterized PDF page as underlay; glyph/rule
+    // reconstruction hidden (overlays still draw on top)
+    const und = el('image', {href:`/api/page-image?i=${pi+1}&r=${pdfRev}`,
+      x:0, y:0, width:px(pg.w), height:px(pg.h), class:'underlay'});
+    svg.insertBefore(und, base);
     for (const [x, y, w, h, st] of pg.r) {
       if (st === 2) {           // image rule: outlined placeholder
         svg.appendChild(el('rect', {x:px(x), y:px(y), width:px(w),
@@ -163,6 +171,25 @@ function renderPages() {
       }
     }
     cont.appendChild(svg);
+  });
+  applyView();
+}
+
+// print view: real PDF page rasters replace the glyph reconstruction;
+// live overlays (red) and approximate shifts still draw on top
+function applyView() {
+  document.querySelectorAll('svg.sheet').forEach(svg => {
+    svg.querySelectorAll('image.underlay').forEach(
+      im => im.style.display = printView ? '' : 'none');
+    svg.querySelectorAll(':scope > g:not(.overlay), :scope > rect, :scope > text')
+       .forEach(e => e.style.display = printView ? 'none' : '');
+  });
+}
+
+function refreshUnderlays() {
+  let i = 0;
+  document.querySelectorAll('image.underlay').forEach(im => {
+    im.setAttribute('href', `/api/page-image?i=${++i}&r=${pdfRev}`);
   });
 }
 
@@ -344,12 +371,26 @@ function onEdit() {
     $('curpara').textContent = span ? '¶ ' + span.id : '¶ (outside paragraph)';
   });
   $('restart').addEventListener('click', () => j('/api/restart', {}));
+  $('pview').addEventListener('click', () => {
+    printView = !printView;
+    $('pview').style.background = printView ? '#f5c76a' : '';
+    applyView();
+  });
+  const s0 = await j('/api/rev');
+  pdfRev = s0.pdf_rev || 0;
+  if (printView) $('pview').style.background = '#f5c76a';
   renderPages();
+  refreshUnderlays();
   // idle poll: repaginations triggered outside the editor (supporting-file
-  // watcher, other clients) re-render without a local edit
+  // watcher, other clients) and freshly rasterized PDFs re-render without
+  // a local edit
   setInterval(async () => {
     if (polling) return;
     const s = await j('/api/rev');
+    if (s.pdf_rev && s.pdf_rev !== pdfRev) {
+      pdfRev = s.pdf_rev;
+      refreshUnderlays();
+    }
     if (s.rev !== DOC.rev && !s.converging) {
       DOC = await j('/api/doc');
       clearOverlays();

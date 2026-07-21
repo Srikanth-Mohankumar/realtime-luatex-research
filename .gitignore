@@ -17,3 +17,4 @@ prototype/templates/*/article-marked.*
 prototype/templates/*/article-live.*
 prototype/templates/*/article-serve.*
 prototype/testdocs/
+prototype/templates/*/*-pngs-r*/
