@@ -107,11 +107,26 @@ anchoring must use first-baseline-relative profiles, and `\baselineskip`/
 fast path gets the wrong leading (found on the production template, which
 uses non-default leading).
 
-True differential pagination for the tier-1 case — re-cutting pages from
-the edited page onward without re-typesetting untouched paragraphs
-(checkpoint/resume à la TeXpresso, or a galley re-cut from cached line
-boxes) — is the natural next milestone; today the convergence pass is a
-plain full compile.
+**Persistent convergence engine** (`engine/converge-loop.lua`): the
+convergence pass no longer pays the preamble. A preamble-resident lualatex
+(in `--draftmode`: shipout callbacks fire for the capture, no PDF/image
+embedding) typesets the document body on request — register
+snapshot/restore, capture reset, `\r@`/`\b@` label seeding from the
+reference aux. On the ACS production article this cut repagination from
+18 s to **~3.5 s wall** (preamble was 13 s of the 18).
+
+Engines are **single-shot with background prewarm**: validation caught the
+production template's float machinery leaking state across body re-runs
+(run 2 lost the figure pages), so every repagination uses a fresh warm
+engine — guaranteed first-run semantics, verified byte-identical to a
+fresh full compile, including a delete-section/restore round-trip. The
+replacement engine's 13 s preamble load happens off the critical path;
+only structural edits arriving faster than the prewarm queue behind it.
+
+Still on the table for sub-second repagination: galley re-cut (re-run only
+page breaking over cached line boxes from the edited page onward) and
+checkpoint/resume à la TeXpresso; and TNQ-side profiling of why the
+template preamble costs 13 s.
 
 ## Results (2026-07-21, LuaHBTeX 1.22.0, TeX Live 2025, Linux)
 
