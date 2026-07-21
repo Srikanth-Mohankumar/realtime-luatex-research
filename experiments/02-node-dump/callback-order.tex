@@ -1,0 +1,9 @@
+% callback-order.tex -- trace the order in which node-list callbacks fire.
+% Run: luatex --interaction=nonstopmode callback-order.tex
+\directlua{dofile("callback-order.lua")}
+\hsize=200pt
+Some sample text long enough to break into a couple of lines when the
+measure is as narrow as two hundred points, plus an
+\hbox{explicit box} for good measure.
+\par
+\end

@@ -48,6 +48,16 @@ Our replication of that reverse engineering, in three steps:
    (≈ 0.2 nanometers on paper; sp-exactness would need prefix-span
    measurement or replicating the engine's glue-rounding order).
 
+**Postscript — the exact arithmetic was subsequently reverse-engineered** in
+[notes/01](../../notes/01-luatex-nodes-and-callbacks.md) §5 and
+`../02-node-dump/expansion-verify.tex`, achieving **0 sp** by hand: glyph
+advance = `round(width × (10⁶ + expansion_factor) / 10⁶)`, and kern nodes
+carry an *undocumented* `expansion_factor` field with different semantics —
+an absolute sp amount added to the kern (sign-selected full stretch/shrink at
+the font's max). Missing the kern field is what left our manual method 715 sp
+off. `node.dimensions` remains the practical choice; the manual formulas
+document what it does.
+
 Other node-level facts the extractor must handle (all hit in this experiment):
 
 - `\parindent` materializes as a leading empty hlist of width 15 pt — nested
