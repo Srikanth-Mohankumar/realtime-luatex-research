@@ -1,0 +1,141 @@
+{
+ "template": "cas-dc",
+ "full_compile_s": 1.249606103003316,
+ "server_startup_ms": 914.4786940014455,
+ "paras": [
+  {
+   "id": 1,
+   "src_prefix": "Automated typesetting systems have historically ",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 4,
+   "first_rt_ms": 3.308,
+   "rt_ms": 3.104,
+   "engine_ms": 2.657
+  },
+  {
+   "id": 2,
+   "src_prefix": "The line-breaking problem, by contrast, is intri",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 4,
+   "first_rt_ms": 2.567,
+   "rt_ms": 3.362,
+   "engine_ms": 2.675
+  },
+  {
+   "id": 3,
+   "src_prefix": "We evaluate this hypothesis empirically across s",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 4,
+   "first_rt_ms": 2.045,
+   "rt_ms": 1.99,
+   "engine_ms": 1.546
+  },
+  {
+   "id": 4,
+   "src_prefix": "Interestingly, the dominant cost is the breakpoi",
+   "status": "GLYPHS",
+   "detail": "char sequence differs (line with 106 vs 132 glyphs)",
+   "ref_lines": 2,
+   "first_rt_ms": 70.417,
+   "rt_ms": 3.225,
+   "engine_ms": 2.986
+  },
+  {
+   "id": 5,
+   "src_prefix": "Consider a paragraph consisting of $n$ items wit",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 4,
+   "first_rt_ms": 2.664,
+   "rt_ms": 2.458,
+   "engine_ms": 1.921
+  },
+  {
+   "id": 6,
+   "src_prefix": "The total demerits of a breakpoint sequence comb",
+   "status": "LINES",
+   "detail": "ref 1 lines vs fast 4",
+   "ref_lines": 1,
+   "first_rt_ms": 6.646,
+   "rt_ms": 3.094,
+   "engine_ms": 2.466
+  },
+  {
+   "id": 7,
+   "src_prefix": "Equation~\\ref{eq:demerits} is minimized by dynam",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 4,
+   "first_rt_ms": 4.006,
+   "rt_ms": 3.419,
+   "engine_ms": 2.905
+  },
+  {
+   "id": 8,
+   "src_prefix": "Figure~\\ref{fig:placeholder} illustrates the flo",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 3,
+   "first_rt_ms": 1.732,
+   "rt_ms": 1.315,
+   "engine_ms": 1.015
+  },
+  {
+   "id": 9,
+   "src_prefix": "Not every paragraph is eligible for local recomp",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 4,
+   "first_rt_ms": 2.132,
+   "rt_ms": 1.86,
+   "engine_ms": 1.449
+  },
+  {
+   "id": 10,
+   "src_prefix": "The remaining body text, which constitutes the o",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 6,
+   "first_rt_ms": 2.149,
+   "rt_ms": 5.961,
+   "engine_ms": 4.972
+  },
+  {
+   "id": 11,
+   "src_prefix": "Across all templates the median per-paragraph re",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 3,
+   "first_rt_ms": 4.299,
+   "rt_ms": 3.654,
+   "engine_ms": 3.237
+  },
+  {
+   "id": 12,
+   "src_prefix": "These measurements corroborate the central claim",
+   "status": "EXACT",
+   "detail": "max delta 0 sp",
+   "ref_lines": 3,
+   "first_rt_ms": 39.621,
+   "rt_ms": 1.918,
+   "engine_ms": 1.509
+  }
+ ],
+ "edits": [
+  {
+   "id": 1,
+   "rt_ms": 2.901
+  },
+  {
+   "id": 2,
+   "rt_ms": 2.208
+  },
+  {
+   "id": 3,
+   "rt_ms": 5.427
+  }
+ ]
+}

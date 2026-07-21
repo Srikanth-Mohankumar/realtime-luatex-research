@@ -1,0 +1,8 @@
+\input{preamble.tex}
+\begin{document}
+\makeatletter\@input{sample.aux}\makeatother
+\directlua{dofile("../../engine/serve2.lua")}%
+\directlua{RTLOADAUX("sample.aux")}%
+\newif\ifserving \servingtrue
+\loop\directlua{SERVE_ONE()}\ifserving\repeat
+\end{document}

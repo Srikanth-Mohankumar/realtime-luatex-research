@@ -4,3 +4,10 @@
 !sources/*.pdf
 *.synctex.gz
 sources/luatex-benchmark/
+prototype/tmp/
+prototype/templates/*/sample-capture.json
+prototype/templates/*/*.spl
+__pycache__/
+*.out
+*.abs
+*.toc

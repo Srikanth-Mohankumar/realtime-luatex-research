@@ -1,0 +1,124 @@
+% body-shared.tex — common article body used by every journal template.
+% \RTpara{<id>} markers key each test paragraph for context capture; the
+% test client sends the paragraph SOURCE (marker stripped, lines joined)
+% to the persistent server and compares line breaks against the capture.
+\section{Introduction}
+
+\RTpara{1}
+Automated typesetting systems have historically treated document compilation
+as a monolithic operation: source files enter, a complete rendered document
+leaves. This architecture, inherited from batch processing environments of
+the nineteen-seventies, imposes a fundamental latency floor on interactive
+editing that grows linearly with document length and severity of preamble
+complexity.
+
+\RTpara{2}
+The line-breaking problem, by contrast, is intrinsically local. Given a fixed
+measure and a fixed sequence of boxes, glue, and penalties, the optimal
+arrangement of breakpoints depends on nothing outside the paragraph itself.
+This observation, implicit in the dynamic programming formulation of the
+classical algorithm, suggests that the unit of interactive recompilation
+should be the paragraph rather than the document.
+
+\RTpara{3}
+We evaluate this hypothesis empirically across several production journal
+classes. The computational cost of breaking a single paragraph with full
+character protrusion and font expansion enabled is measured in fractions of
+a millisecond, comfortably inside the sixteen-millisecond budget of a single
+display frame at sixty hertz, and roughly two orders of magnitude below the
+threshold at which human observers judge a response to be instantaneous.
+
+\RTpara{4}
+Interestingly, the dominant cost is the breakpoint search itself rather than
+any auxiliary processing\footnote{Hyphenation, ligaturing, and kerning are
+applied in separate passes before the breakpoint optimization begins.}, so
+paragraphs with unusual content do not exhibit pathological behavior.
+
+\section{Method}
+
+\RTpara{5}
+Consider a paragraph consisting of $n$ items with natural widths $w_i$,
+stretchability $y_i$, and shrinkability $z_i$. The adjustment ratio of a
+candidate line is $r = (L - W)/Y$ when the line must stretch, where $L$ is
+the target measure, $W$ the accumulated natural width, and $Y$ the
+accumulated stretchability. The badness of setting the line is then
+approximately $100|r|^3$, capped at ten thousand.
+
+\RTpara{6}
+The total demerits of a breakpoint sequence combine badness with penalty
+terms,
+\begin{equation}
+D = \sum_{j} \bigl( l + \beta_j \bigr)^2 + \pi_j^2 + \delta_j,
+\label{eq:demerits}
+\end{equation}
+where $l$ is the line penalty, $\beta_j$ the badness of line $j$, $\pi_j$
+any explicit penalty at the chosen breakpoint, and $\delta_j$ the adjacency
+demerits charged when consecutive lines differ excessively in tightness.
+
+\RTpara{7}
+Equation~\ref{eq:demerits} is minimized by dynamic programming over feasible
+breakpoints, and the minimizing sequence is unique for all practical
+parameter settings. The consequence relevant to interactive systems is
+determinism: recompiling an unchanged paragraph reproduces byte-identical
+line boxes, and recompiling an edited paragraph perturbs no other paragraph
+in the document.
+
+\begin{figure}[t]
+\centering
+\rule{0.8\linewidth}{3.2cm}
+\caption{Placeholder figure occupying the top of a column, forcing the
+surrounding text to reflow around a float insertion.}
+\label{fig:placeholder}
+\end{figure}
+
+\RTpara{8}
+Figure~\ref{fig:placeholder} illustrates the float mechanism that couples
+paragraph content to page layout. Floats are implemented as insertions and
+migrate to page-assembly time; their placement is a global decision that the
+per-paragraph fast path deliberately excludes and defers to a background
+convergence pass.
+
+\subsection{Locality boundaries}
+
+\RTpara{9}
+Not every paragraph is eligible for local recompilation. Footnotes couple
+the paragraph to the page builder through the insertion mechanism; counters
+and cross-references read global state; and paragraph shape parameters
+established by surrounding code are invisible to an isolated compilation.
+These cases are detectable by inspection of the node list and routed to the
+slow path.
+
+\RTpara{10}
+The remaining body text, which constitutes the overwhelming majority of any
+manuscript and virtually all of the material an author actively edits,
+satisfies the locality property unconditionally. Hyphenation exceptions,
+discretionary breaks, interword spacing adjustments, and typographic
+refinements such as protrusion and expansion are all confined within the
+paragraph boundary, and consequently reproduce exactly under isolated
+recompilation whenever the captured context parameters are reinjected
+faithfully, a property we verify to the resolution of a single scaled point,
+that is, to less than one five-hundred-millionth of a centimeter, across
+every paragraph and every journal class examined in this study.
+
+\section{Results}
+
+\RTpara{11}
+Across all templates the median per-paragraph recompilation time remains
+below two milliseconds, and the reconstructed glyph positions agree with the
+reference compilation exactly. Two-column layouts show no degradation: the
+line breaker is indifferent to the column geometry beyond the measure
+itself.
+
+\RTpara{12}
+These measurements corroborate the central claim of the real-time
+typesetting literature~\cite{knuthplass,lode}: the venerable optimal-fit
+algorithm is fast enough
+to run on every keystroke, and the historical absence of interactive
+engines reflects architectural inertia rather than algorithmic cost.
+
+\begin{thebibliography}{9}
+\bibitem{knuthplass} D.~E. Knuth and M.~F. Plass, Breaking paragraphs into
+lines, \emph{Software—Practice and Experience} 11 (1981) 1119--1184.
+\bibitem{lode} C.~Lode, Real-time LuaTeX: recompiling large documents in
+one millisecond, \emph{TUGboat} (2026), preprint.
+\end{thebibliography}

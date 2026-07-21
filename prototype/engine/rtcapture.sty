@@ -1,0 +1,10 @@
+% rtcapture.sty — load the context-capture pass into a full compile.
+% Usage: \usepackage{rtcapture} in the sample document (after the class).
+% Plant \RTpara{<id>} before each body paragraph you want keyed for the
+% fast path; ids appear as node attributes in the capture output.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{rtcapture}[2026/07/21 v0.1 context capture for real-time LuaTeX]
+\directlua{RTCAPTURE = dofile("../../engine/capture.lua")}
+\newcommand\RTpara[1]{\directlua{RTCAPTURE.setpara(#1)}}
+\AtBeginDocument{\directlua{RTCAPTURE.start()}}
+\AtEndDocument{\directlua{RTCAPTURE.finish(tex.jobname .. "-capture.json")}}
