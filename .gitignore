@@ -3,3 +3,4 @@
 *.pdf
 !sources/*.pdf
 *.synctex.gz
+sources/luatex-benchmark/
