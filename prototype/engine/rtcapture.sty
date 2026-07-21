@@ -6,6 +6,9 @@
 \ProvidesPackage{rtcapture}[2026/07/21 v0.1 context capture for real-time LuaTeX]
 \directlua{RTCAPTURE = dofile("../../engine/capture.lua")}
 \newcommand\RTpara[1]{\directlua{RTCAPTURE.setpara(#1)}}
+% production markup: \paraid{para10} at paragraph start -> attribute via a
+% string->int registry (written to the capture JSON as "ids")
+\AtBeginDocument{\def\paraid#1{\directlua{RTCAPTURE.setparaid("\luaescapestring{#1}")}}}
 \AtBeginDocument{\directlua{RTCAPTURE.start()}}
 % \clearpage first: the final page must ship before we write the capture
 \AtEndDocument{\clearpage\directlua{RTCAPTURE.finish(tex.jobname .. "-capture.json")}}

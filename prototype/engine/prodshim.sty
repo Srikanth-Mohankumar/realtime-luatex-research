@@ -1,0 +1,10 @@
+% prodshim.sty — demo stand-ins for the production paragraph wrapper macros.
+% In production these carry structure tagging; here they are inert so a
+% production-marked source compiles standalone. rtcapture.sty redefines
+% \paraid during the capture pass to plant the paragraph attribute.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{prodshim}[2026/07/21 v0.1 production paragraph wrapper stand-ins]
+\providecommand{\tagStructPara}{}
+\providecommand{\tagStructParaEnd}{}
+\providecommand{\NeoParStart}[1]{#1}
+\providecommand{\paraid}[1]{}

@@ -4,29 +4,25 @@
 <meta charset="utf-8">
 <title>Real-Time LuaTeX — live document demo</title>
 <style>
-  :root { --bg:#f5f3ee; --ink:#1a1a1a; --accent:#8b2635; --panel:#fff; }
+  :root { --bg:#f5f3ee; --ink:#1a1a1a; --accent:#8b2635; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
   header { display:flex; align-items:center; gap:16px; padding:10px 18px;
            background:#1e1b18; color:#eee; flex-wrap:wrap; }
   header h1 { font-size:15px; margin:0; font-weight:600; }
-  header select { font:inherit; padding:3px 6px; }
   .hud { display:flex; gap:14px; margin-left:auto; font-variant-numeric:tabular-nums; align-items:center; }
   .hud b { color:#7ee0a3; font-weight:600; }
   .hud span { opacity:.85 }
+  #curpara { color:#f5c76a; }
   #conv { padding:2px 8px; border-radius:10px; background:#333; font-size:12px; }
   #conv.busy { background:#7a5a00; }
   #conv.fresh { background:#1e5c33; }
-  main { display:grid; grid-template-columns: minmax(300px,2fr) minmax(460px,3fr); gap:0; height:calc(100vh - 46px); }
-  #editor { overflow-y:auto; padding:14px; border-right:1px solid #ddd; }
+  main { display:grid; grid-template-columns: minmax(360px,2fr) minmax(460px,3fr); gap:0; height:calc(100vh - 46px); }
+  #editorwrap { display:flex; flex-direction:column; border-right:1px solid #ccc; }
+  #src { flex:1; width:100%; border:0; outline:none; resize:none;
+         font:12.5px/1.5 ui-monospace, "Cascadia Code", monospace;
+         padding:12px 14px; background:#fffdf7; color:#222; white-space:pre; overflow:auto; }
   #pages { overflow:auto; padding:22px; background:#dcd7cc; }
-  .para { margin-bottom:10px; }
-  .para textarea { width:100%; min-height:64px; font:12.5px/1.4 ui-monospace, monospace;
-                   padding:8px; border:1px solid #ccc; border-radius:4px; background:var(--panel);
-                   resize:vertical; }
-  .para textarea:focus { outline:2px solid var(--accent); border-color:transparent; }
-  .para .tag { font-size:11px; color:#777; margin-bottom:2px; display:flex; gap:8px; }
-  .para .tag .stat { color:var(--accent); font-weight:600; }
   svg.sheet { background:#fff; box-shadow:0 2px 14px rgba(0,0,0,.25); display:block; margin:0 auto 26px; }
   g.overlay text { fill:#8b2635; }
   footer.note { padding:8px 18px; font-size:12px; color:#666; background:var(--bg); }
@@ -39,30 +35,33 @@
   <span id="docname" style="opacity:.8"></span>
   <button id="restart" title="respawn the engine if wedged">&#10227; engine</button>
   <div class="hud">
+    <span id="curpara">–</span>
     <span>engine <b id="h-eng">–</b> ms</span>
     <span>round&#8209;trip <b id="h-rt">–</b> ms</span>
     <span id="conv">page cache rev <b id="h-rev">1</b></span>
   </div>
 </header>
 <main>
-  <div id="editor"></div>
+  <div id="editorwrap"><textarea id="src" spellcheck="false"></textarea></div>
   <div id="pages"></div>
 </main>
 <footer class="note">
-  Right side: the <em>real document pages</em> — every glyph position comes from
-  LuaTeX's shipout node structures (title, abstract, two-column body, floats,
-  footnotes). Typing re-breaks the edited paragraph through the persistent
-  engine in ~1–3&nbsp;ms and overlays it (dark red) at its cached page position.
-  After ~1.5&nbsp;s idle, a <em>real full compile</em> runs in the background and the
-  page cache converges — page breaks, column balance and positions update, and
-  the overlay merges back to black. Glyph outlines are a browser-font stand-in;
-  positions are engine-exact.
+  The left pane is the <em>full source file</em>. Paragraphs carry production
+  markup (<code>\tagStructPara{}\paraid{...}\NeoParStart{..}...\tagStructParaEnd{}%</code>).
+  Typing inside a marked paragraph re-breaks it through the persistent LuaTeX
+  engine (~1–3&nbsp;ms) and overlays it (dark red) at its cached page position;
+  edits anywhere else (preamble, headings, floats) go to the background path.
+  After ~1.2&nbsp;s idle the full edited source recompiles for real and the page
+  cache converges. Glyph positions are engine-exact; outlines are a
+  browser-font stand-in.
 </footer>
 <script>
 "use strict";
 const SP = 65536, PXPT = 96/72.27;
 let ZOOM = 1.15;
 const px = sp => sp / SP * PXPT * ZOOM;
+const NS = 'http://www.w3.org/2000/svg';
+
 // Char-code -> Unicode by FONT ENCODING: TFM math fonts use OML/OMS/OMX
 // slots, text fonts use T1 ligature slots. Approximate maps for display.
 const T1 = {11:'ff',12:'fi',13:'fl',14:'ffi',15:'ffl',25:'ı',26:'ȷ',27:'ff',28:'fi',29:'fl',30:'ffi',31:'ffl'};
@@ -76,9 +75,8 @@ function glyphChar(c, fname) {
   return c >= 32 ? String.fromCodePoint(c) : (T1[c] || '·');
 }
 const mathItalic = fname => /cmmi|lmmi|txmi/.test(fname);
-const NS = 'http://www.w3.org/2000/svg';
 
-let DOC = null, inflight = false, dirty = null, polling = false;
+let DOC = null, inflight = false, dirty = null, polling = false, srcTimer = null;
 
 const $ = id => document.getElementById(id);
 async function j(url, body) {
@@ -92,29 +90,56 @@ const el = (name, attrs) => {
   for (const k in attrs) e.setAttribute(k, attrs[k]);
   return e;
 };
-
-function fontSize(f) {
+const fontSize = f => {
   const info = DOC.fonts[String(f)];
   return px(info ? info.size : 655360);
+};
+
+// ---- production-markup paragraph spans in the source ----
+const PARA_START = '\\tagStructPara{}', PARA_END = '\\tagStructParaEnd{}';
+function scanSpans(src) {
+  const spans = [];
+  const re = /\\paraid\{([\w.-]+)\}/g;
+  let m;
+  while ((m = re.exec(src))) {
+    let start = m.index;
+    const w = src.lastIndexOf(PARA_START, start);
+    if (w >= 0 && src.slice(w + PARA_START.length, start).trim() === '') start = w;
+    const endTag = src.indexOf(PARA_END, re.lastIndex);
+    const blankRel = src.slice(re.lastIndex).search(/\n[ \t]*\n/);
+    const blankAbs = blankRel >= 0 ? re.lastIndex + blankRel : src.length;
+    let end;
+    if (endTag >= 0 && endTag < blankAbs) {
+      end = endTag + PARA_END.length;
+      if (src[end] === '%') end++;
+    } else {
+      end = blankAbs;
+    }
+    spans.push({id: m[1], start, end});
+  }
+  return spans;
 }
+const spanAt = (spans, pos) =>
+  spans.find(s => pos >= s.start && pos <= s.end);
 
 // ---- page rendering (the page-position cache) ----
 function renderPages() {
   const cont = $('pages');
   cont.innerHTML = '';
-  DOC._origin = {};   // pid -> {page, x, y} paragraph box origin on page
+  DOC._origin = {};   // paraid -> {page, x, y}: paragraph's first glyph
   DOC.pages.forEach((pg, pi) => {
     const svg = el('svg', {class:'sheet', width:px(pg.w), height:px(pg.h)});
     svg.id = 'page' + pi;
-    const base = el('g', {});           // non-paragraph glyphs
+    const base = el('g', {});
     svg.appendChild(base);
-    const attrG = {};                    // per-paragraph glyph groups
+    const attrG = {};
     for (const [c, x, y, f, a] of pg.g) {
       let parent = base;
-      if (a >= 0) {
-        if (!attrG[a]) { attrG[a] = el('g', {id:`pg${pi}a${a}`}); svg.appendChild(attrG[a]); }
-        parent = attrG[a];
-        if (!DOC._origin[a]) DOC._origin[a] = {page: pi, x, y};  // first glyph in reading order
+      const pid = a >= 0 ? (DOC.ids[String(a)] || String(a)) : null;
+      if (pid) {
+        if (!attrG[pid]) { attrG[pid] = el('g', {'data-para': pid}); svg.appendChild(attrG[pid]); }
+        parent = attrG[pid];
+        if (!DOC._origin[pid]) DOC._origin[pid] = {page: pi, x, y};
       }
       const fname = (DOC.fonts[String(f)] || {}).name || '';
       const t = el('text', {x:px(x), y:px(y), 'font-size':fontSize(f),
@@ -129,23 +154,19 @@ function renderPages() {
   });
 }
 
-// ---- live overlay: fast-path recompile drawn at the cached origin ----
+// ---- live overlay ----
 function overlay(pid, sig, fonts) {
   const org = DOC._origin[pid];
   const para = DOC.paras.find(p => p.id === pid);
-  if (!org || !para) return;
-  // origin of the paragraph's vbox on the page: first page glyph minus its
-  // paragraph-relative position in the reference signature
-  const ref = para.sig;
-  if (!ref.length || !ref[0].g.length) return;
-  const x0 = org.x - ref[0].g[0][1];
-  const y0 = org.y - ref[0].y;
+  if (!org || !para || !para.sig.length || !para.sig[0].g.length) return;
+  const x0 = org.x - para.sig[0].g[0][1];
+  const y0 = org.y - para.sig[0].y;
   const svg = $('page' + org.page);
-  const cached = $(`pg${org.page}a${pid}`);
+  const cached = svg.querySelector(`g[data-para="${pid}"]`);
   if (cached) cached.setAttribute('opacity', '0');
-  let ov = $(`ov${pid}`);
+  let ov = document.getElementById('ov-' + pid);
   if (ov) ov.remove();
-  ov = el('g', {id:`ov${pid}`, class:'overlay'});
+  ov = el('g', {id: 'ov-' + pid, class: 'overlay'});
   for (const line of sig) {
     for (const [c, x, f] of line.g) {
       const info = fonts && fonts[String(f)];
@@ -167,36 +188,32 @@ function clearOverlays() {
 }
 
 // ---- fast path ----
-async function compile(p, text) {
-  if (inflight) { dirty = [p, text]; return; }
+async function compilePara(pid, text) {
+  if (inflight) { dirty = [pid, text]; return; }
   inflight = true;
   const t0 = performance.now();
-  const resp = await j('/api/compile', {id: p.id, text});
+  const resp = await j('/api/compile', {id: pid, text});
   inflight = false;
-  const tag = document.querySelector(`#p${p.id} .stat`);
-  if (resp.error) {
-    tag.textContent = '⚠ ' + resp.error.slice(0, 70);
-  } else {
-    overlay(p.id, resp.sig, resp.fonts);
+  if (!resp.error) {
+    overlay(pid, resp.sig, resp.fonts);
     $('h-eng').textContent = resp.ms.toFixed(2);
     $('h-rt').textContent = (performance.now() - t0).toFixed(1);
-    tag.textContent = `${resp.sig.length} lines · ${resp.ms.toFixed(2)} ms in-engine`;
-    pollConvergence();
   }
-  if (dirty) { const [dp, dt] = dirty; dirty = null; compile(dp, dt); }
+  if (dirty) { const [dp, dt] = dirty; dirty = null; compilePara(dp, dt); }
 }
 
-// ---- background convergence polling ----
+// ---- background convergence ----
 async function pollConvergence() {
   if (polling) return;
   polling = true;
   const badge = $('conv');
   badge.className = 'busy';
   badge.firstChild.textContent = 'converging… rev ';
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 120; i++) {
     await new Promise(r => setTimeout(r, 700));
     const s = await j('/api/rev');
     if (s.rev !== DOC.rev && !s.converging) {
+      const src = $('src').value;         // keep user's buffer
       DOC = await j('/api/doc');
       clearOverlays();
       renderPages();
@@ -205,6 +222,7 @@ async function pollConvergence() {
       badge.firstChild.textContent = 'page cache rev ';
       polling = false;
       setTimeout(() => badge.className = '', 1200);
+      if ($('src').value !== src) $('src').value = src;
       return;
     }
   }
@@ -213,29 +231,32 @@ async function pollConvergence() {
 }
 
 // ---- editor ----
-function buildEditor() {
-  const ed = $('editor');
-  ed.innerHTML = '';
-  for (const p of DOC.paras) {
-    const div = document.createElement('div');
-    div.className = 'para';
-    div.id = 'p' + p.id;
-    div.innerHTML = `<div class="tag">¶ ${p.id} <span class="stat"></span></div>`;
-    const ta = document.createElement('textarea');
-    ta.value = p.text;
-    ta.addEventListener('input', () => compile(p, ta.value));
-    div.appendChild(ta);
-    ed.appendChild(div);
-  }
+function onEdit() {
+  const ta = $('src');
+  const src = ta.value;
+  const spans = scanSpans(src);
+  const span = spanAt(spans, ta.selectionStart);
+  $('curpara').textContent = span ? '¶ ' + span.id : '¶ (outside paragraph)';
+  if (span) compilePara(span.id, src.slice(span.start, span.end));
+  clearTimeout(srcTimer);
+  srcTimer = setTimeout(async () => {
+    await j('/api/source', {source: src});
+    pollConvergence();
+  }, 900);
 }
 
 (async () => {
-  $('editor').innerHTML = '<p style="color:#777">loading document…</p>';
   DOC = await j('/api/doc');
   $('docname').textContent = DOC.name;
   $('h-rev').textContent = DOC.rev;
+  const ta = $('src');
+  ta.value = DOC.source;
+  ta.addEventListener('input', onEdit);
+  ta.addEventListener('click', () => {
+    const span = spanAt(scanSpans(ta.value), ta.selectionStart);
+    $('curpara').textContent = span ? '¶ ' + span.id : '¶ (outside paragraph)';
+  });
   $('restart').addEventListener('click', () => j('/api/restart', {}));
-  buildEditor();
   renderPages();
 })();
 </script>

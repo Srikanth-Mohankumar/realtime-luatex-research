@@ -122,12 +122,12 @@ def compare(ref, fast):
 
 
 class Server:
-    def __init__(self, tpl_dir, texfile="server.tex"):
+    def __init__(self, tpl_dir, texfile="server.tex", env=None):
         t0 = time.perf_counter()
         self.proc = subprocess.Popen(
             ["lualatex", "-interaction=nonstopmode", texfile],
             cwd=tpl_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            text=True, bufsize=1)
+            text=True, bufsize=1, env=env)
         for line in self.proc.stdout:
             if line.strip().endswith("RTSERVE READY"):
                 break

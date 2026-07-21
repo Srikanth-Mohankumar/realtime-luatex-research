@@ -2,6 +2,7 @@
 \usepackage{microtype}
 \usepackage{amsmath}
 \usepackage{booktabs}
+\usepackage{prodshim}
 
 \begin{document}
 
@@ -37,43 +38,43 @@ Typesetting, line breaking, real-time systems, document engineering.
 
 \section{Introduction}
 
-\IEEEPARstart{A}{utomated} typesetting systems have historically treated
+\tagStructPara{}\paraid{para1}\NeoParStart{A}utomated typesetting systems have historically treated
 document compilation as a monolithic operation: source files enter, a
 complete rendered document leaves. This architecture, inherited from the
 batch environments of the nineteen-seventies, imposes a latency floor on
 interactive editing that grows linearly with document length and with the
-severity of the preamble.
+severity of the preamble.\tagStructParaEnd{}%
 
-The line-breaking problem, by contrast, is intrinsically local. Given a
+\tagStructPara{}\paraid{para2}The line-breaking problem, by contrast, is intrinsically local. Given a
 fixed measure and a fixed sequence of boxes, glue, and penalties, the
 optimal arrangement of breakpoints depends on nothing outside the paragraph
 itself. This observation, implicit in the dynamic programming formulation
 of the classical algorithm, suggests that the unit of interactive
-recompilation should be the paragraph rather than the document.
+recompilation should be the paragraph rather than the document.\tagStructParaEnd{}%
 
-Word processors have exploited exactly this separation for decades: the
+\tagStructPara{}\paraid{para3}Word processors have exploited exactly this separation for decades: the
 paragraph under the cursor is re-flowed on every keystroke, while
 pagination, running heads, and cross-references converge in a background
 process. What has been missing is not an algorithm but an engineering
 bridge that brings the same interaction model to a batch typesetting
-engine without sacrificing its output quality.
+engine without sacrificing its output quality.\tagStructParaEnd{}%
 
-This paper contributes such a bridge. We capture, for every paragraph of a
+\tagStructPara{}\paraid{para4}This paper contributes such a bridge. We capture, for every paragraph of a
 real journal manuscript, the complete parameter context consumed by the
 line breaker; we keep a persistent engine alive so that the preamble is
 paid for once; and we verify, glyph by glyph, that isolated recompilation
-reproduces the reference document exactly.
+reproduces the reference document exactly.\tagStructParaEnd{}%
 
 \section{The Locality Property}
 
-Consider a paragraph consisting of $n$ items with natural widths $w_i$,
+\tagStructPara{}\paraid{para5}Consider a paragraph consisting of $n$ items with natural widths $w_i$,
 stretchability $y_i$, and shrinkability $z_i$. The adjustment ratio of a
 candidate line is $r = (L - W)/Y$ when the line must stretch, where $L$ is
 the target measure, $W$ the accumulated natural width, and $Y$ the
 accumulated stretchability. The badness of setting the line is
-approximately $100\,|r|^3$, capped at ten thousand.
+approximately $100\,|r|^3$, capped at ten thousand.\tagStructParaEnd{}%
 
-The total demerits of a breakpoint sequence combine badness with penalty
+\tagStructPara{}\paraid{para6}The total demerits of a breakpoint sequence combine badness with penalty
 terms,
 \begin{equation}
 D = \sum_{j} \bigl( l + \beta_j \bigr)^2 + \pi_j^2 + \delta_j,
@@ -81,73 +82,73 @@ D = \sum_{j} \bigl( l + \beta_j \bigr)^2 + \pi_j^2 + \delta_j,
 \end{equation}
 where $l$ is the line penalty, $\beta_j$ the badness of line $j$, $\pi_j$
 any explicit penalty at the chosen breakpoint, and $\delta_j$ the adjacency
-demerits charged when consecutive lines differ excessively in tightness.
+demerits charged when consecutive lines differ excessively in tightness.\tagStructParaEnd{}%
 
-Equation~\eqref{eq:demerits} is minimized by dynamic programming over
+\tagStructPara{}\paraid{para7}Equation~\eqref{eq:demerits} is minimized by dynamic programming over
 feasible breakpoints, and the minimizing sequence is unique for practical
 parameter settings. The consequence relevant to interactive systems is
 determinism: recompiling an unchanged paragraph reproduces byte-identical
 line boxes, and recompiling an edited paragraph perturbs no other
-paragraph in the document.
+paragraph in the document.\tagStructParaEnd{}%
 
-The dependency set of the line breaker is finite and enumerable: the
+\tagStructPara{}\paraid{para8}The dependency set of the line breaker is finite and enumerable: the
 measure, the paragraph shape, the fonts active at paragraph start, the
 hyphenation language, the tolerance and emergency stretch, the penalty and
 demerit parameters, and the interword skip overrides. We refer to this
 collection as the paragraph's \emph{context}. If the context is captured
 during a reference compilation and reinjected around an isolated
-recompilation, the reproduction is exact.
+recompilation, the reproduction is exact.\tagStructParaEnd{}%
 
 \section{System Architecture}
 
-Our prototype comprises four cooperating components.
+\tagStructPara{}\paraid{para9}Our prototype comprises four cooperating components.\tagStructParaEnd{}%
 
-First, a capture pass instruments a normal compilation. Callbacks around
+\tagStructPara{}\paraid{para10}First, a capture pass instruments a normal compilation. Callbacks around
 the line breaker record each paragraph's context together with a reference
 signature: the width, height, and depth of every line box and the exact
 position of every glyph within it, expressed in scaled points, of which
 there are $65{,}536$ to the printer's point\footnote{All measurements in
 this paper were taken with LuaHBTeX 1.22.0 from \TeX{} Live 2025 on a
-commodity Linux workstation.}.
+commodity Linux workstation.}.\tagStructParaEnd{}%
 
-Second, a persistent engine loads the journal class preamble once and then
+\tagStructPara{}\paraid{para11}Second, a persistent engine loads the journal class preamble once and then
 services recompilation requests indefinitely. Each request supplies the
 edited source of one paragraph together with its captured context, which
 the server reinstates before re-running the paragraph builder; the
 response carries positioned glyphs extracted directly from the engine's
-node structures, bypassing page generation entirely.
+node structures, bypassing page generation entirely.\tagStructParaEnd{}%
 
-Third, cross-reference state is transplanted from the reference
+\tagStructPara{}\paraid{para12}Third, cross-reference state is transplanted from the reference
 compilation's auxiliary file, so that citations and references inside an
 isolated paragraph resolve to their converged values rather than to
-placeholder marks.
+placeholder marks.\tagStructParaEnd{}%
 
-Fourth, a background convergence pass recompiles the full document a short
+\tagStructPara{}\paraid{para13}Fourth, a background convergence pass recompiles the full document a short
 interval after the last edit, refreshing the cached page geometry against
 which live paragraphs are overlaid. Pagination, floats, and running heads
 are therefore eventually consistent, in the same sense a word processor's
-layout is.
+layout is.\tagStructParaEnd{}%
 
 \section{Evaluation}
 
-We evaluate fidelity and latency on the journal class of this very
+\tagStructPara{}\paraid{para14}We evaluate fidelity and latency on the journal class of this very
 manuscript. Fidelity is judged by the strictest available criterion: the
 recompiled paragraph must reproduce the reference line breaks and every
 glyph position to zero scaled points, with full character protrusion and
-font expansion active.
+font expansion active.\tagStructParaEnd{}%
 
-Across the body paragraphs of the test manuscript, isolated recompilation
+\tagStructPara{}\paraid{para15}Across the body paragraphs of the test manuscript, isolated recompilation
 is exact wherever the paragraph does not couple to global state. The
 exceptions are principled rather than accidental: a footnote couples its
 paragraph to the page builder through the insertion mechanism, and a
 displayed equation splits its paragraph into partial paragraphs whose
 shapes depend on the display. Both cases are detectable by inspection of
-the node list and are routed to the convergence path.
+the node list and are routed to the convergence path.\tagStructParaEnd{}%
 
-Latency is summarized in Table~\ref{tab:latency}. The keystroke path
+\tagStructPara{}\paraid{para16}Latency is summarized in Table~\ref{tab:latency}. The keystroke path
 completes in single-digit milliseconds, roughly two orders of magnitude
 inside the hundred-millisecond threshold at which interfaces are judged
-instantaneous, and comfortably inside a sixty-hertz display frame.
+instantaneous, and comfortably inside a sixty-hertz display frame.\tagStructParaEnd{}%
 
 \begin{table}[!t]
 \caption{Measured Latency of the Keystroke Path\label{tab:latency}}
@@ -164,42 +165,42 @@ Full document compile & \multicolumn{2}{c}{900\,ms} \\
 \end{tabular}
 \end{table}
 
-The comparison with whole-document recompilation is stark. Even this
+\tagStructPara{}\paraid{para17}The comparison with whole-document recompilation is stark. Even this
 modest manuscript costs nearly a second per compile; a book-length
 document costs tens of seconds. The per-paragraph path is independent of
 document length by construction, so the advantage widens without bound as
-the document grows.
+the document grows.\tagStructParaEnd{}%
 
-Memory behavior is equally important for a long-lived engine. Every
+\tagStructPara{}\paraid{para18}Memory behavior is equally important for a long-lived engine. Every
 recompiled paragraph allocates node lists that must be freed
 deterministically; our server frees the working box after each response,
 and five hundred consecutive recompilations show no drift in either
-latency or engine memory.
+latency or engine memory.\tagStructParaEnd{}%
 
 \section{Limitations and Future Work}
 
-Three limitations bound the present prototype. Paragraphs inside list
+\tagStructPara{}\paraid{para19}Three limitations bound the present prototype. Paragraphs inside list
 environments receive their labels from the enclosing environment rather
 than from their own source, so label glyphs are absent from isolated
 recompiles. Global assignments in body text can leak between requests in a
 long-lived engine; checkpointing would make isolation airtight. And
 mid-edit source is frequently ill-formed, which the server survives by
 sanitizing input and respawning on the rare wedge, but a production system
-would maintain an incremental parse of the manuscript instead.
+would maintain an incremental parse of the manuscript instead.\tagStructParaEnd{}%
 
-The natural next step is source mapping: deriving paragraph identity from
+\tagStructPara{}\paraid{para20}The natural next step is source mapping: deriving paragraph identity from
 an editor's document model rather than from markers, so that any existing
 manuscript can be edited live without preparation. The capture and replay
-machinery described here is unchanged by that step.
+machinery described here is unchanged by that step.\tagStructParaEnd{}%
 
 \section{Conclusion}
 
-Pixel-identical \LaTeX{} output and millisecond editing feedback are not
+\tagStructPara{}\paraid{para21}Pixel-identical \LaTeX{} output and millisecond editing feedback are not
 in tension. The line breaker that produces the former has always been fast
 enough for the latter; what was required was to stop asking it to
 recompile entire documents. A paragraph-local fast path with background
 convergence brings the interaction model of word processors to batch
-typesetting without compromising its typography.
+typesetting without compromising its typography.\tagStructParaEnd{}%
 
 \begin{thebibliography}{9}
 \bibitem{knuthplass} D.~E. Knuth and M.~F. Plass, ``Breaking paragraphs
@@ -210,5 +211,4 @@ in 1\,ms,'' \emph{TUGboat}, 2026, preprint.
 \bibitem{bour} F.~Bour, ``TeXpresso: live rendering and error reporting
 for \LaTeX,'' \emph{TUGboat}, vol.~44, no.~2, pp. 185--192, 2023.
 \end{thebibliography}
-
 \end{document}

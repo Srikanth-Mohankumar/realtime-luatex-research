@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """Local demo bridge: browser <-> a persistent LuaTeX engine, for editing
-ONE real .tex document live.
+ONE production-marked .tex document live.
 
 Run:  python3 server.py [path/to/article.tex] [port]
       (default: ../templates/ieeetran/article.tex, port 8123)
 Open: http://localhost:8123/
 
-The document needs NO preparation: paragraphs are auto-detected (blank-line
-separated prose at environment/brace depth zero) and tagged with \\RTpara
-markers in a generated working copy (<name>-marked.tex). The original file
-is never modified.
+Paragraphs are identified by the PRODUCTION wrapper convention:
 
-Both halves of the real-time architecture run:
-  * FAST PATH — a persistent lualatex with the document's own preamble;
-    every keystroke recompiles the edited paragraph with its captured
-    context (~1-3 ms) and the page overlays it at the cached position.
-  * BACKGROUND CONVERGENCE — after 1.5 s idle, the document with all edits
-    applied is recompiled for real, producing a fresh page-position cache
-    (glyph display lists captured at shipout); the client re-renders when
-    the revision counter bumps.
+  \\tagStructPara{}\\paraid{para10}\\NeoParStart{T}he text ...\\tagStructParaEnd{}%
+
+\\paraid{<id>} plants the paragraph attribute during the capture pass
+(rtcapture.sty redefines it), so captured contexts, page glyphs, and edit
+requests are all keyed by the production paragraph id. The browser edits
+the FULL source file; the paragraph under the cursor takes the fast path,
+and the full edited source recompiles in the background (convergence).
 """
 import json
 import os
@@ -44,32 +40,15 @@ DIR = DOC_FILE.parent
 STEM = DOC_FILE.stem
 ENV = {**os.environ, "TEXINPUTS": str(ROOT / "engine") + ":"}
 
-PARA_RE = re.compile(r"(\\RTpara\{(\d+)\}\n)(.*?)(\n[ \t]*\n|\n?$)", re.S)
-PROSE_CMDS = ("\\emph", "\\textbf", "\\textit", "\\IEEEPARstart",
-              "\\LaTeX", "\\TeX", "\\noindent")
+PARA_RE = re.compile(
+    r"\\paraid\{([\w.-]+)\}(.*?)(?:\\tagStructParaEnd\{\}|\n[ \t]*\n|$)", re.S)
 
 
-def auto_mark(body):
-    """Insert \\RTpara{n} before each prose paragraph: a blank-line-separated
-    block starting with text, at environment AND brace depth zero (so text
-    inside \\author{...}, abstract, tables, bibliographies is left alone)."""
-    out, pid, env, brace, in_para = [], 0, 0, 0, False
-    for line in body.splitlines():
-        code = re.sub(r"(?<!\\)%.*", "", line)     # ignore comments
-        s = code.strip()
-        prose = s and (s[0].isalpha() or s[0] in "`'$" or
-                       s.startswith(PROSE_CMDS))
-        if env == 0 and brace == 0 and not in_para and prose:
-            pid += 1
-            out.append("\\RTpara{%d}" % pid)
-            in_para = True
-        if not s:
-            in_para = False
-        env += s.count("\\begin{") - s.count("\\end{")
-        brace += (s.replace("\\{", "").replace("\\}", "").count("{")
-                  - s.replace("\\{", "").replace("\\}", "").count("}"))
-        out.append(line)
-    return "\n".join(out)
+def parse_paras(source):
+    """{paraid: paragraph source text (lines joined)} from production marks."""
+    return {m.group(1): " ".join(
+        l.strip() for l in m.group(2).strip().splitlines())
+        for m in PARA_RE.finditer(source)}
 
 
 def sanitize(text):
@@ -85,53 +64,40 @@ def sanitize(text):
     return text
 
 
-def parse_marked(marked_body):
-    return {int(m.group(2)): " ".join(
-        l.strip() for l in m.group(3).strip().splitlines())
-        for m in PARA_RE.finditer(marked_body)}
+def with_rtcapture(source):
+    return source.replace("\\begin{document}",
+                          "\\usepackage{rtcapture}\n\\begin{document}", 1)
 
 
 class Doc:
     def __init__(self):
         self.lock = threading.Lock()
         self.conv_lock = threading.Lock()
-        self.edits = {}
         self.rev = 1
         self.converging = False
         self.conv_timer = None
-
-        src = DOC_FILE.read_text()
-        m = re.search(r"(.*?)\\begin\{document\}(.*)\\end\{document\}",
-                      src, re.S)
-        if not m:
-            sys.exit(f"{DOC_FILE}: no document environment found")
-        self.preamble, body = m.group(1), m.group(2)
-        self.marked_body = auto_mark(body)
-        self.write_variant(f"{STEM}-marked.tex", self.marked_body)
-        self.write_serve()
+        self.source = DOC_FILE.read_text()
 
         print(f"[{STEM}] compiling reference ({DOC_FILE.name})...")
+        (DIR / f"{STEM}-live.tex").write_text(with_rtcapture(self.source))
         for _ in range(2):
-            r = self.compile_tex(f"{STEM}-marked.tex")
+            r = self.compile_tex(f"{STEM}-live.tex")
         if "RTCAPTURE: wrote" not in r.stdout:
             print(r.stdout[-2500:])
             sys.exit("reference compile failed")
-        self.load_capture(DIR / f"{STEM}-marked-capture.json")
-        print(f"[{STEM}] {len(self.body)} editable paragraphs, "
+        self.write_serve()
+        self.load_capture()
+        print(f"[{STEM}] {len(self.body)} paragraphs (\\paraid), "
               f"{len(self.pages)} pages")
         self.spawn()
 
-    def write_variant(self, name, body):
-        (DIR / name).write_text(
-            self.preamble + "\\usepackage{rtcapture}\n"
-            + "\\begin{document}" + body + "\\end{document}\n")
-
     def write_serve(self):
+        m = re.search(r"(.*?)\\begin\{document\}", self.source, re.S)
         (DIR / f"{STEM}-serve.tex").write_text(
-            self.preamble + "\\begin{document}\n"
+            m.group(1) + "\\begin{document}\n"
             "\\directlua{dofile(\"" + str(ROOT / "engine" / "serve2.lua")
             + "\")}%\n"
-            "\\directlua{RTLOADAUX(\"" + f"{STEM}-marked.aux" + "\")}%\n"
+            "\\directlua{RTLOADAUX(\"" + f"{STEM}-live.aux" + "\")}%\n"
             "\\newif\\ifserving \\servingtrue\n"
             "\\loop\\directlua{SERVE_ONE()}\\ifserving\\repeat\n"
             "\\end{document}\n")
@@ -141,20 +107,28 @@ class Doc:
             ["lualatex", "-interaction=nonstopmode", name],
             cwd=DIR, capture_output=True, text=True, env=ENV, timeout=300)
 
-    def load_capture(self, path):
-        data = json.loads(path.read_text())
+    def load_capture(self):
+        data = json.loads((DIR / f"{STEM}-live-capture.json").read_text())
         self.captured = data["paras"]
+        self.ids = data.get("ids", {})            # attr int (str) -> paraid
+        id_of = {int(k): v for k, v in self.ids.items()}
+        for p in self.captured:
+            p["pid"] = id_of.get(p["attr"]) if p["attr"] is not None else None
         self.pages = data.get("pages", [])
         self.fonts = data.get("fonts", {})
-        body = parse_marked(self.marked_body)
-        body.update(self.edits)
-        self.body = body
-        self.caps = {pid: match_para(pid, srctext, self.captured)
-                     for pid, srctext in body.items()}
+        self.body = parse_paras(self.source)
+        self.caps = {}
+        for pid, text in self.body.items():
+            cands = [p for p in self.captured if p["pid"] == pid]
+            if cands:
+                # reuse fingerprint ranking from rtclient.match_para
+                best = match_para(None, text,
+                                  [dict(p, attr=None) for p in cands])
+                self.caps[pid] = best
 
     def spawn(self):
         t0 = time.perf_counter()
-        self.srv = Server(DIR, f"{STEM}-serve.tex")
+        self.srv = Server(DIR, f"{STEM}-serve.tex", env=ENV)
         fonts = sorted({(p["font_name"], p["font_size"])
                         for p in self.captured if p["font_name"]})
         self.srv.request(lua_val({"preload": [list(f) for f in fonts]}))
@@ -168,13 +142,12 @@ class Doc:
             pass
         self.spawn()
 
-    # ---- fast path ----
+    # ---- fast path: one paragraph, by production id ----
     def compile(self, pid, text):
         cap = self.caps.get(pid)
         if cap is None:
-            return {"error": f"no captured context for paragraph {pid}"}
-        clean = sanitize(text)
-        req = build_request(clean, cap)
+            return {"error": f"no captured context for '{pid}'"}
+        req = build_request(sanitize(text), cap)
         with self.lock:
             box = {}
 
@@ -194,39 +167,32 @@ class Doc:
         rt, resp = box["r"]
         resp["rt_ms"] = round(rt, 3)
         resp["rev"] = self.rev
-        self.edits[pid] = clean
-        self.schedule_convergence()
         return resp
 
-    # ---- background convergence ----
-    def schedule_convergence(self, delay=1.5):
+    # ---- background convergence: full edited source ----
+    def update_source(self, source):
+        self.source = source
         if self.conv_timer:
             self.conv_timer.cancel()
-        self.conv_timer = threading.Timer(delay, self.converge)
+        self.conv_timer = threading.Timer(1.2, self.converge)
         self.conv_timer.daemon = True
         self.conv_timer.start()
+        return {"scheduled": True, "rev": self.rev}
 
     def converge(self):
         with self.conv_lock:
             self.converging = True
             t0 = time.perf_counter()
             try:
-                def repl(m):
-                    pid = int(m.group(2))
-                    if pid in self.edits:
-                        return m.group(1) + self.edits[pid] + m.group(4)
-                    return m.group(0)
-                self.write_variant(f"{STEM}-live.tex",
-                                   PARA_RE.sub(repl, self.marked_body))
-                marked_aux = DIR / f"{STEM}-marked.aux"
-                live_aux = DIR / f"{STEM}-live.aux"
-                if marked_aux.exists() and not live_aux.exists():
-                    shutil.copy(marked_aux, live_aux)
+                (DIR / f"{STEM}-live.tex").write_text(
+                    with_rtcapture(self.source))
                 r = self.compile_tex(f"{STEM}-live.tex")
                 if "RTCAPTURE: wrote" not in r.stdout:
-                    print(f"[{STEM}] convergence compile failed")
+                    tail = "\n".join(l for l in r.stdout.splitlines()
+                                     if l.startswith("!"))[:400]
+                    print(f"[{STEM}] convergence compile failed: {tail}")
                     return
-                self.load_capture(DIR / f"{STEM}-live-capture.json")
+                self.load_capture()
                 self.rev += 1
                 print(f"[{STEM}] converged rev {self.rev} in "
                       f"{time.perf_counter() - t0:.2f} s")
@@ -235,15 +201,16 @@ class Doc:
 
     def doc(self):
         paras = []
-        for pid, srctext in sorted(self.body.items()):
+        for pid, text in self.body.items():
             cap = self.caps.get(pid)
             paras.append({
-                "id": pid, "text": srctext,
+                "id": pid,
                 "sig": cap["sig"] if cap else [],
                 "font_size": cap["font_size"] if cap else 655360,
             })
-        return {"name": DOC_FILE.name, "rev": self.rev, "paras": paras,
-                "pages": self.pages, "fonts": self.fonts}
+        return {"name": DOC_FILE.name, "rev": self.rev,
+                "source": self.source, "paras": paras,
+                "ids": self.ids, "pages": self.pages, "fonts": self.fonts}
 
 
 THE_DOC = None
@@ -281,7 +248,9 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or "{}")
         if self.path == "/api/compile":
-            self.send_json(THE_DOC.compile(int(body["id"]), body["text"]))
+            self.send_json(THE_DOC.compile(body["id"], body["text"]))
+        elif self.path == "/api/source":
+            self.send_json(THE_DOC.update_source(body["source"]))
         elif self.path == "/api/restart":
             with THE_DOC.lock:
                 THE_DOC.respawn()

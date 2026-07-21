@@ -30,6 +30,18 @@ function M.setpara(id)
   tex.setattribute(M.attr, id)
 end
 
+-- production markup: string paragraph ids ("para10") -> attribute ints
+M.idmap, M.nextid = {}, 0
+function M.setparaid(s)
+  local n = M.idmap[s]
+  if not n then
+    M.nextid = M.nextid + 1
+    n = M.nextid
+    M.idmap[s] = n
+  end
+  tex.setattribute(M.attr, n)
+end
+
 local function glue_t(g)
   if not g then return { 0, 0, 0, 0, 0 } end
   return { g.width or 0, g.stretch or 0, g.stretch_order or 0,
@@ -294,8 +306,13 @@ function M.finish(path)
     fparts[#fparts + 1] = string.format('"%d":{"name":%q,"size":%d}',
       id, f.name or "", f.size or 655360)
   end
+  local idparts = {}
+  for s, n in pairs(M.idmap) do
+    idparts[#idparts + 1] = string.format('"%d":%q', n, s)
+  end
   local fh = io.open(path, "w")
   fh:write('{"paras":[\n' .. table.concat(out, ",\n") .. "\n],\n")
+  fh:write('"ids":{' .. table.concat(idparts, ",") .. '},\n')
   fh:write('"fonts":{' .. table.concat(fparts, ",") .. '},\n')
   fh:write('"pages":[\n' .. table.concat(pparts, ",\n") .. "\n]}\n")
   fh:close()
