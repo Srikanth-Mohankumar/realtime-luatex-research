@@ -263,6 +263,12 @@ async function pollConvergence() {
   for (let i = 0; i < 120; i++) {
     await new Promise(r => setTimeout(r, 700));
     const s = await j('/api/rev');
+    if (s.error) {
+      badge.className = 'busy';
+      badge.firstChild.textContent = '⚠ ' + s.error.slice(0, 48) + ' · rev ';
+      polling = false;
+      return;
+    }
     if (s.rev !== DOC.rev && !s.converging) {
       const src = $('src').value;         // keep user's buffer
       DOC = await j('/api/doc');
@@ -289,11 +295,29 @@ function onEdit() {
   const span = spanAt(spans, ta.selectionStart);
   $('curpara').textContent = span ? '¶ ' + span.id : '¶ (outside paragraph)';
   if (span) compilePara(span.id, src.slice(span.start, span.end));
+  // deleted/restored paragraphs: hide their page glyphs immediately and
+  // shift the column up (approximate; real repagination converges behind)
+  const present = new Set(spans.map(s => s.id));
+  for (const p of DOC.paras) {
+    const g = document.querySelector(`g[data-para="${p.id}"]`);
+    if (!g) continue;
+    if (!present.has(p.id) && !g.hasAttribute('data-deleted')) {
+      g.setAttribute('opacity', '0');
+      g.setAttribute('data-deleted', '1');
+      const ov = document.getElementById('ov-' + p.id);
+      if (ov) ov.remove();
+      approxShift(p.id, []);           // shift below content up by its extent
+    } else if (present.has(p.id) && g.hasAttribute('data-deleted')) {
+      g.removeAttribute('opacity');
+      g.removeAttribute('data-deleted');
+      approxShift(p.id, p.sig);        // undo the shift
+    }
+  }
   clearTimeout(srcTimer);
   srcTimer = setTimeout(async () => {
     await j('/api/source', {source: src});
     pollConvergence();
-  }, 900);
+  }, 500);
 }
 
 (async () => {

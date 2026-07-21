@@ -217,36 +217,53 @@ class Doc:
         return resp
 
     # ---- background convergence: full edited source ----
+    @staticmethod
+    def skeleton(source):
+        """Source with paragraph BODIES blanked: captures document
+        structure (sections, floats, markers, preamble). If the skeleton
+        changed, the edit is structural — sections/paragraphs were added
+        or removed — and repagination must run immediately."""
+        return PARA_RE.sub(lambda m: "\\paraid{%s}<>" % m.group(1), source)
+
     def update_source(self, source):
+        structural = self.skeleton(source) != self.skeleton(self.source)
         self.source = source
         if self.conv_timer:
             self.conv_timer.cancel()
-        # stable edits already patched the page cache: the full recompile is
-        # only bookkeeping (tags/aux), so defer it well out of the typing
-        # flow; unstable edits need real repagination soon
-        delay = 25.0 if getattr(self, "last_stable", False) else 1.2
+        if structural:
+            delay = 0.2          # sections/paragraphs changed: go now
+            self.last_stable = False
+        elif getattr(self, "last_stable", False):
+            delay = 25.0         # page cache already patched in place
+        else:
+            delay = 1.2          # height-changing paragraph edit
         self.conv_timer = threading.Timer(delay, self.converge)
         self.conv_timer.daemon = True
         self.conv_timer.start()
-        return {"scheduled": True, "delay": delay, "rev": self.rev}
+        return {"scheduled": True, "delay": delay,
+                "structural": structural, "rev": self.rev}
 
     def converge(self):
         with self.conv_lock:
             self.converging = True
+            self.conv_error = None
             t0 = time.perf_counter()
             try:
                 (DIR / f"{STEM}-live.tex").write_text(
                     with_rtcapture(self.source))
                 r = self.compile_tex(f"{STEM}-live.tex")
                 if "RTCAPTURE: wrote" not in r.stdout:
-                    tail = "\n".join(l for l in r.stdout.splitlines()
-                                     if l.startswith("!"))[:400]
-                    print(f"[{STEM}] convergence compile failed: {tail}")
+                    errs = [l for l in r.stdout.splitlines()
+                            if l.startswith("!")]
+                    self.conv_error = (errs[0] if errs
+                                       else "compile produced no capture")
+                    print(f"[{STEM}] convergence FAILED: {self.conv_error}")
                     return
                 self.load_capture()
                 self.rev += 1
+                self.last_conv_s = round(time.perf_counter() - t0, 2)
                 print(f"[{STEM}] converged rev {self.rev} in "
-                      f"{time.perf_counter() - t0:.2f} s")
+                      f"{self.last_conv_s} s")
             finally:
                 self.converging = False
 
@@ -291,7 +308,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(THE_DOC.doc())
         elif self.path.startswith("/api/rev"):
             self.send_json({"rev": THE_DOC.rev,
-                            "converging": THE_DOC.converging})
+                            "converging": THE_DOC.converging,
+                            "conv_s": getattr(THE_DOC, "last_conv_s", None),
+                            "error": getattr(THE_DOC, "conv_error", None)})
         else:
             self.send_json({"error": "not found"}, 404)
 
