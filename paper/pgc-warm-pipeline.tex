@@ -291,6 +291,21 @@ article is next opened.
 
 \section{The serve engine: one paragraph in milliseconds}
 
+A preview request arrives with the operator's \emph{entire} current
+XML, and the first thing the backend does is convert all of it --- through
+the warm worker, so it costs 0.3--0.5\,s --- and then extract only the
+edited paragraph's span from the resulting \TeX{} (located by the
+\cs{paraid} wrapper the converter emits, sanitized against mid-edit
+artifacts). Converting just the paragraph's XML in isolation would be
+faster still, but the converter is document-scoped: numbering, counters,
+cross-reference context and satellite-driven configuration all shape a
+paragraph's \TeX{}. The preview's whole value is that its line breaks
+are engine-exact, which requires the fragment's bytes to be identical
+to a real build's --- so we keep the real converter on the real document
+and make it resident instead of skipping it. (If previews ever need to
+be faster, the lever is caching the conversion when nothing outside the
+edited paragraph changed --- an optimization, not a redesign.)
+
 The serve engine is the second kind of resident \LuaTeX{} process, and
 it makes the opposite trade from the build engine. It is
 \emph{multi-shot} --- one engine serves thousands of requests --- and
