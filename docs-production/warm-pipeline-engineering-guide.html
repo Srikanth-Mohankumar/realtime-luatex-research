@@ -1,0 +1,1226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Warm Pipeline — Engineering Guide</title>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'neutral' });
+</script>
+<style>
+  :root { --paper:#F6F5F1; --ink:#212226; --muted:#64666D; --hairline:#DFDCD3;
+          --accent:#BE531F; --code-bg:#EEECE5; --card:#FFFFFF; }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper:#17181C; --ink:#E8E7E2; --muted:#9A9CA3; --hairline:#2F3138;
+            --accent:#D65F1E; --code-bg:#26282E; --card:#1F2126; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink);
+         font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
+         padding:48px 24px 120px; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size:34px; letter-spacing:-0.015em; line-height:1.15; }
+  h2 { font-size:24px; margin-top:2.2em; padding-top:0.8em;
+       border-top:1px solid var(--hairline); }
+  h3 { font-size:18px; margin-top:1.8em; }
+  a { color:var(--accent); }
+  code { background:var(--code-bg); border-radius:4px; padding:1px 5px;
+         font:13.5px ui-monospace,"SF Mono",Menlo,Consolas,monospace; }
+  pre { background:var(--code-bg); border-radius:8px; padding:14px 16px;
+        overflow-x:auto; }
+  pre code { background:none; padding:0; font-size:13px; line-height:1.5; }
+  pre.mermaid { background:var(--card); border:1px solid var(--hairline);
+                text-align:center; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; margin:1em 0;
+          display:block; overflow-x:auto; }
+  th, td { border:1px solid var(--hairline); padding:8px 12px; text-align:left;
+           vertical-align:top; }
+  th { background:var(--code-bg); font-size:12.5px; text-transform:uppercase;
+       letter-spacing:0.05em; color:var(--muted); }
+  blockquote { border-left:3px solid var(--accent); margin:1em 0;
+               padding:2px 18px; color:var(--muted);
+               background:color-mix(in oklab, var(--accent) 6%, var(--paper)); }
+  hr { border:none; border-top:1px solid var(--hairline); margin:2.5em 0; }
+  li { margin:3px 0; }
+</style>
+</head>
+<body>
+<main>
+<h1 id="the-warm-pipeline--engineering-guide">The Warm Pipeline — Engineering Guide</h1>
+<p><strong>Audience:</strong> engineers extending the PGC Editor implementation or porting this
+architecture to another platform (a different editor, a different converter, a
+different document pipeline built on LuaLaTeX).</p>
+<p><strong>Status:</strong> describes the implementation on <code>mr-bean</code> branch
+<code>feature/warm-pipeline</code> as of July 2026 (Phases 1–2d complete, verified on
+production articles). Companion documents:</p>
+<table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>paper/pgc-warm-pipeline.tex</code> (PDF)</td>
+<td>6-page engineering article — the narrative version of this guide</td>
+</tr>
+<tr>
+<td><code>paper/pgc-warm-pipeline-summary.tex</code> (PDF)</td>
+<td>2-page executive summary for architecture review</td>
+</tr>
+<tr>
+<td><code>paper/eventually-consistent-page.tex</code></td>
+<td>the research paper — theory, fidelity methodology, tiered pagination model</td>
+</tr>
+<tr>
+<td><code>docs-production/mr-bean-realtime-architecture.md</code></td>
+<td>the original survey + phased plan</td>
+</tr>
+<tr>
+<td><code>docs-production/stakeholder-brief.html</code></td>
+<td>visual brief (artifact) with measured numbers</td>
+</tr>
+</tbody>
+</table>
+<p>This guide is the reference: every protocol byte, every schema field, every
+gotcha we hit, and a porting checklist at the end.</p>
+<hr />
+<h2 id="table-of-contents">Table of contents</h2>
+<ol>
+<li><a href="#1-theory-why-this-works-at-all">Theory: why this works at all</a></li>
+<li><a href="#2-system-overview">System overview</a></li>
+<li><a href="#3-the-warm-build-engine">The warm build engine</a></li>
+<li><a href="#4-the-engine-pool">The engine pool</a></li>
+<li><a href="#5-the-xml2tex-warm-worker">The xml2tex warm worker</a></li>
+<li><a href="#6-stable-paragraph-identity-pgcid">Stable paragraph identity (pgcid)</a></li>
+<li><a href="#7-paragraph-capture">Paragraph capture</a></li>
+<li><a href="#8-the-serve-engine">The serve engine</a></li>
+<li><a href="#9-backend-api-surface">Backend API surface</a></li>
+<li><a href="#10-the-frontend">The frontend</a></li>
+<li><a href="#11-concurrency-capacity-multi-tenancy">Concurrency, capacity, multi-tenancy</a></li>
+<li><a href="#12-configuration-reference">Configuration reference</a></li>
+<li><a href="#13-correctness-and-testing">Correctness and testing</a></li>
+<li><a href="#14-operational-runbook">Operational runbook</a></li>
+<li><a href="#15-the-full-gotcha-catalog">The full gotcha catalog</a></li>
+<li><a href="#16-porting-guide-integrating-on-another-platform">Porting guide: integrating on another platform</a></li>
+<li><a href="#17-future-work-levers">Future work levers</a></li>
+<li><a href="#18-file-map">File map</a></li>
+</ol>
+<hr />
+<h2 id="1-theory-why-this-works-at-all">1. Theory: why this works at all</h2>
+<h3>1.1 The cost anatomy of a LaTeX build</h3>
+<p>Measured on a real production article (ACS, 10 pages, structure tagging,
+OpenType fonts), one cold compile of 18.2 s decomposes as:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Cost</th>
+<th>Depends on the edit?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>xml2tex process spawn + template parse</td>
+<td>0.7–1.9 s</td>
+<td><strong>no</strong></td>
+</tr>
+<tr>
+<td>TeX template preamble (fonts, packages, tagging machinery)</td>
+<td>13.1 s (72%)</td>
+<td><strong>no</strong></td>
+</tr>
+<tr>
+<td>Typesetting the document body</td>
+<td>~5 s</td>
+<td>partially</td>
+</tr>
+<tr>
+<td>Result discovery by 2 s polling</td>
+<td>up to 2 s</td>
+<td><strong>no</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Almost everything a build pays is <em>invariant under the edit</em>. The architecture
+follows directly: keep the invariant work resident in warm processes, pay only
+the variant part per build.</p>
+<h3>1.2 The locality principle</h3>
+<p>Knuth–Plass line breaking is <strong>paragraph-local</strong>: which words land on which
+line depends only on the paragraph's own content plus a finite parameter
+context (~30 values: <code>\hsize</code>, penalties, demerits, the starting font, …).
+Page breaking, by contrast, is <strong>global</strong>: where pages break depends on
+everything.</p>
+<p>Consequences:</p>
+<ul>
+<li>One paragraph can be re-typeset <em>exactly</em>, in isolation, in milliseconds —
+if and only if you reproduce its parameter context bit-for-bit.</li>
+<li>Nothing short of a full body run can tell you where pages break.</li>
+</ul>
+<p>So the system has two speeds by design: an exact single-paragraph preview in
+~0.2 s, and a full warm build in 3–5 s that produces ground truth. The preview
+never guesses at pagination; it renders the edited paragraph at its
+<em>last-known</em> position and flags when its vertical extent changed (meaning the
+next build will shift things).</p>
+<h3>1.3 The five design rules</h3>
+<p>Stated once, used to answer every &quot;what happens when…&quot; question:</p>
+<ol>
+<li><strong>Warm state is keyed per article, never per user or globally.</strong></li>
+<li><strong>Warm state is disposable.</strong> Engines, workspaces, captures are caches over
+the file server. Killing any of them costs one slower build, never data.</li>
+<li><strong>The cold path is never removed.</strong> Every warm-path miss or failure falls
+back to the original pipeline. Worst case <em>equals</em> the old behavior.</li>
+<li><strong>Output must be identical, and gated.</strong> A golden cold-vs-warm comparison
+guards the feature flag per customer. Speed never trades against fidelity.</li>
+<li><strong>Memory is bounded by counting processes.</strong> Every resident thing has a
+cap, an idle reaper, and lives under an explicit container memory limit.</li>
+</ol>
+<hr />
+<h2 id="2-system-overview">2. System overview</h2>
+<pre class="mermaid">
+flowchart LR
+  subgraph browser [Browser]
+    ED[Monaco XML editor<br/>paragraphs carry pgcid]
+    PV[PDF viewer pdf.js<br/>per-page overlay layer]
+  end
+  subgraph backend [Backend FastAPI]
+    Q[Convert queue<br/>4 workers, per-article lock,<br/>supersession]
+    X[xml2tex worker<br/>persistent Node, NDJSON]
+    P[Warm engine pool<br/>preamble-resident LuaTeX<br/>single-shot per build]
+    S[Serve engines<br/>persistent per article<br/>one paragraph per request]
+  end
+  subgraph state [State]
+    W[(Workspaces<br/>per article, on disk)]
+    C[(Paragraph capture<br/>ctx + sig + geometry)]
+    F[(File server<br/>single source of truth)]
+  end
+  ED -- build --> Q
+  ED -- keystroke --> S
+  Q --> X --> P
+  P -- PDF + SSE --> PV
+  S -- line data ~0.2s --> PV
+  P -- writes --> C
+  Q <--> W
+  W <--> C
+  C <--> F
+  C -- contexts --> S
+</pre>
+<p>Two request paths leave the editor:</p>
+<ul>
+<li><strong>Build path</strong> (operator presses build): queue → warm xml2tex → warm engine →
+PDF → SSE push. 3–5 s. Produces truth, refreshes the capture.</li>
+<li><strong>Keystroke path</strong> (operator just types): debounce → resolve pgcid at cursor
+→ full warm xml2tex → extract one paragraph's TeX span → serve engine
+re-typesets it in captured context → browser overlays the result. ~0.2–0.5 s.
+Produces an exact preview of one paragraph.</li>
+</ul>
+<hr />
+<h2 id="3-the-warm-build-engine">3. The warm build engine</h2>
+<h3>3.1 The idea</h3>
+<p>A normal <code>lualatex</code> run reads preamble + body from a file and exits. A warm
+engine reads the <strong>preamble only</strong>, then parks inside the document and waits
+for a body over stdin. All the preamble cost (fonts, packages, tagging
+machinery — 13 s on heavy templates) is paid before any build asks for it.</p>
+<h3>3.2 The TeX-side loop</h3>
+<p>The harness ends the preamble with:</p>
+<pre><code class="language-tex">\loop\directlua{ENGINE_ONE()}\ifserving\repeat
+</code></pre>
+<p>Each iteration calls a Lua function that <strong>blocks on stdin</strong>. TeX is
+suspended mid-document; the process sits at ~0 CPU. When a request arrives,
+the Lua side <code>tex.print()</code>s the body content, TeX typesets it exactly as if
+it had followed <code>\begin{document}</code> in a normal run, and control returns to
+the loop.</p>
+<blockquote>
+<p><strong>Gotcha (historical):</strong> driving the repetition with a <em>nested</em> plain-TeX
+<code>\loop</code> inside another macro broke in early experiments. Drive the loop from
+Lua (<code>tex.print</code> of the next iteration's tokens) or keep the <code>\loop</code> at
+top level as above.</p>
+</blockquote>
+<h3>3.3 Wire protocol</h3>
+<p>Line-oriented over stdin/stdout. Exhaustive:</p>
+<table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Message</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>engine → pool</td>
+<td><code>ENGINEREADY</code></td>
+<td>preamble typeset; engine is warm and idle</td>
+</tr>
+<tr>
+<td>pool → engine</td>
+<td><code>RUN &lt;bodyfile&gt; [&lt;capturefile&gt;]</code></td>
+<td>typeset this body; optionally write a paragraph capture</td>
+</tr>
+<tr>
+<td>engine → pool</td>
+<td><code>ENGINEDONE &lt;ms&gt;</code></td>
+<td>body finished shipping pages; elapsed ms for telemetry</td>
+</tr>
+<tr>
+<td>engine → pool</td>
+<td><code>ENGINEERR &lt;msg&gt;</code></td>
+<td>request malformed / body failed</td>
+</tr>
+<tr>
+<td>engine → pool</td>
+<td><code>ENGINELOG &lt;msg&gt;</code></td>
+<td>non-fatal diagnostics (e.g. capture failures) — <strong>must be surfaced to logs</strong>, not swallowed</td>
+</tr>
+<tr>
+<td>pool → engine</td>
+<td><code>QUIT</code> (or stdin EOF)</td>
+<td>fall through the loop to <code>\end{document}</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>QUIT</code> is not process kill.</strong> Letting the loop fall through to
+<code>\end{document}</code> runs the engine's normal shutdown — which is what writes the
+PDF cross-reference table and trailer. A killed engine leaves a truncated,
+invalid PDF; a quit engine leaves a valid one.</p>
+<h3>3.4 Plumbing rules (each one cost us real debugging time)</h3>
+<ol>
+<li><strong>Drain stdout to EOF, always, from a dedicated thread.</strong> LuaTeX writes its
+log chatter to stdout. A full pipe blocks the process — including during
+the shutdown that finalizes the PDF. Every engine gets one reader thread
+from spawn to EOF. Never two threads on one pipe (they race and interleave
+partial lines); never zero.</li>
+<li><strong>Drain stderr too</strong> (bounded tail is fine — keep the last ~400 lines for
+diagnostics).</li>
+<li><strong>Capture paths must be relative to the engine's working directory.</strong>
+LuaTeX's paranoid file-open setting (<code>openout_any=p</code>, common in
+distributions) silently rejects <em>absolute</em> output paths. The engine writes
+nothing and nothing errors. Pass <code>foo-capture.json</code>, not
+<code>/abs/path/foo-capture.json</code>.</li>
+<li><strong>Production templates may <code>nil</code> Lua's <code>debug</code> library.</strong> Don't rely on
+<code>debug.getinfo</code> to locate your own Lua files; resolve paths via <code>kpse</code> or
+embed them from the host side.</li>
+<li><strong>Body split point:</strong> split the generated <code>.tex</code> at <code>\begin{document}</code>.
+Hash the preamble (plus customer + article key) to form the <em>preamble key</em>;
+a build can only use a warm engine whose preamble key matches. A template
+or preamble change simply misses the pool and runs cold once.</li>
+</ol>
+<h3>3.5 Why build engines are single-shot</h3>
+<p>The obvious design — one resident engine serving many bodies — <strong>fails on real
+templates.</strong> Production float machinery, structure tagging, and Lua-side
+bookkeeping leak state across body re-runs. Observed concretely: the second
+body run through the same engine silently <strong>lost figure pages</strong>. Snapshotting
+and restoring TeX registers was not sufficient: the state lives partly in Lua
+tables owned by the template.</p>
+<p>Decision: an engine serves <strong>exactly one <code>RUN</code></strong>, then quits; a replacement
+prewarms in the background. Every build gets first-run semantics <em>by
+construction</em>. Warm output was verified byte-identical to a fresh cold compile
+before the flag ever went on.</p>
+<p>The single-shot cost is hidden by prewarming (see §4). Note the contrast with
+serve engines (§8), which are multi-shot — safely, because they never ship
+pages.</p>
+<hr />
+<h2 id="4-the-engine-pool">4. The engine pool</h2>
+<ul>
+<li><strong>Keying:</strong> <code>customer/JIDaid</code> → at most one engine per article, plus the
+preamble-key check at take-time.</li>
+<li><strong>Prewarm triggers:</strong> (a) operator opens an article (<code>GET main.xml</code> hook);
+(b) immediately after every build. Both are fire-and-forget daemon threads.</li>
+<li><strong>Capacity:</strong> at most <code>WARM_MAX_ENGINES</code> (default 6). When full, prewarm
+evicts the least-recently-touched warm engine; if every slot is still
+warming, the prewarm is skipped (logged, not an error).</li>
+<li><strong>Reaper:</strong> engines idle &gt; <code>WARM_ENGINE_IDLE_SECONDS</code> (default 900) are
+quit. Workspaces idle &gt; 24 h are removed (cap 50).</li>
+<li><strong>Miss semantics:</strong> a pool miss is <strong>never an error</strong> — the build runs cold
+(exactly the legacy path) while a fresh engine warms behind it.</li>
+<li><strong>Workspaces:</strong> each article gets a persistent scratch directory holding the
+generated <code>.tex</code>, aux files, and the capture JSON. Aux files <em>converge</em>
+across builds (references stable from the first warm build). The workspace
+also lets captures survive backend restarts: at next article open, an
+existing <code>{stem}-warm-capture.json</code> is re-registered.</li>
+</ul>
+<p>Timeline of the common case:</p>
+<pre class="mermaid">
+sequenceDiagram
+  participant O as Operator
+  participant B as Backend
+  participant E1 as Engine A
+  participant E2 as Engine B
+  O->>B: open article
+  B->>E1: spawn + preamble (~13s, background)
+  E1-->>B: ENGINEREADY
+  O->>B: build
+  B->>E1: RUN body.tex capture.json
+  E1-->>B: ENGINEDONE 2800
+  B->>E1: QUIT (PDF trailer written)
+  B->>E2: prewarm replacement (background)
+  Note over O,B: operator reads the result while B rewarns
+</pre>
+<hr />
+<h2 id="5-the-xml2tex-warm-worker">5. The xml2tex warm worker</h2>
+<h3>5.1 Why full conversion, not paragraph-only</h3>
+<p>The converter is <strong>document-scoped</strong>: numbering, counters, cross-reference
+context, satellite-driven configuration, and template processors that inspect
+siblings/ancestors all shape a paragraph's TeX. Converting an isolated <code>&lt;p&gt;</code>
+would produce <em>almost</em>-right TeX — and the preview's entire value is that its
+line breaks are engine-exact, which requires the fragment's bytes to be
+identical to a real build's. So every preview converts the <strong>whole document</strong>
+with the <strong>real converter</strong>, then extracts one paragraph from the result.</p>
+<h3>5.2 Where the speed comes from</h3>
+<p>The per-document transform was never the slow part:</p>
+<table>
+<thead>
+<tr>
+<th>Cold cost (paid every build in the legacy path)</th>
+<th>Eliminated by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Node process spawn + V8 startup (100–200 ms)</td>
+<td>resident process</td>
+</tr>
+<tr>
+<td><code>require()</code> of the converter module graph</td>
+<td>loaded once</td>
+</tr>
+<tr>
+<td>Parsing/compiling the customer template spec</td>
+<td>parsed once, cached</td>
+</tr>
+<tr>
+<td>V8 running cold (no JIT warmup)</td>
+<td>JIT-warm after a few requests</td>
+</tr>
+<tr>
+<td><strong>The actual transform: ~300–500 ms</strong></td>
+<td><strong>still paid — this is the floor</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Result: 0.7–1.9 s + spawn → 0.3–0.5 s per conversion.</p>
+<h3>5.3 Worker protocol and discipline</h3>
+<ul>
+<li>Persistent Node process; requests/replies are newline-delimited JSON over
+stdin/stdout (<code>{id, xmlPath, customer, options}</code> → <code>{id, ok, outputPath | error}</code>).</li>
+<li><strong>stdout is reserved for protocol frames.</strong> The worker redirects <code>console.*</code>
+to stderr at startup, so chatty vendor/template code cannot corrupt a reply.</li>
+<li><strong>One dedicated reader thread</strong> owns the pipe on the Python side (same rule
+as engines). stderr is drained continuously into a bounded deque for
+diagnostics.</li>
+<li><strong>Self-recycling:</strong> after <code>XML2TEX_WORKER_MAX_RSS</code> bytes or
+<code>XML2TEX_WORKER_MAX_REQS</code> requests, the worker is replaced. A slow leak in
+vendor code resets harmlessly; the next request pays one respawn.</li>
+<li>Preview conversions write to <em>preview-suffixed</em> files
+(<code>{stem}-preview.xml/.tex</code>) so the article's real artifacts are never
+touched by keystrokes.</li>
+</ul>
+<hr />
+<h2 id="6-stable-paragraph-identity-pgcid">6. Stable paragraph identity (pgcid)</h2>
+<p>Everything per-paragraph depends on one invariant: <strong>a paragraph keeps its id
+across edits and sessions.</strong></p>
+<ul>
+<li>The converter's own numbering (<code>paragraphNumberingProcessor</code> in xml2tex2.0)
+is <em>idempotent</em>: ids present in the input XML are preserved; only unnumbered
+paragraphs get fresh ids, assigned above the current maximum (&quot;top-up&quot;).</li>
+<li>We exploit this by <strong>stamping ids at load time, in the backend</strong>, before the
+operator ever sees the XML. The converter then finds every paragraph already
+numbered and changes nothing — proven by parity test: 47/47 ids identical to
+the vendor processor's own output on a real article.</li>
+<li>The stamper is <strong>string-based</strong>: it inserts attributes into the raw XML text
+without parsing/re-serializing a DOM, so untouched bytes stay untouched
+(whitespace, entities, attribute order — everything). Comments, CDATA
+sections and processing instructions are masked during the scan so nothing
+inside them is ever stamped. Self-closing <code>&lt;p/&gt;</code> elements are stamped too
+(the vendor processor does — parity requires it).</li>
+<li>The stamped file is <strong>persisted atomically before it is served</strong>, so the
+editor, converter, and capture all agree on identity from the first
+keystroke.</li>
+<li>Stability under insertion: inserting a new paragraph shifts <strong>0/46</strong> existing
+ids (the new one gets max+1). Naive renumbering would shift 39/46 — which
+would invalidate every capture entry after the insertion point.</li>
+</ul>
+<p><strong>Porting note:</strong> if your converter's numbering is <em>not</em> idempotent, this is
+the first thing to build — either fix the converter (in xml2tex 1.x it is a
+~5-line change plus an un-awaited <code>shouldReprocess()</code> bug) or introduce your
+own stable attribute that the converter provably passes through.</p>
+<hr />
+<h2 id="7-paragraph-capture">7. Paragraph capture</h2>
+<p>A warm build is a measurement opportunity: the engine typesets every paragraph
+anyway, so recording <em>how</em> costs ~nothing. The capture module hooks three
+points in LuaTeX's callback pipeline.</p>
+<h3>7.1 The three hooks</h3>
+<p><strong>Hook 1 — before line breaking</strong> (<code>pre_linebreak_filter</code>, plus the
+<code>insert_local_par</code> callback to catch the paragraph's start):</p>
+<p>Records the full line-breaking context. The exact parameter set (31 keys, from
+a live capture):</p>
+<pre><code>adjdemerits  adjustspacing  baselineskip  doublehyphendemerits
+emergencystretch  exhyphenpenalty  finalhyphendemerits  font_name
+font_size  hangafter  hangindent  hsize  hyphenpenalty  indent  lang
+leftskip  lhmin  linepenalty  lineskip  lineskiplimit  looseness
+parfillskip  parshape  pretolerance  protrudechars  rhmin  rightskip
+spaceskip  tolerance  uchyph  xspaceskip
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li><code>font_name</code> is the <strong>full luaotfload spec</strong>, features included (e.g.
+<code>[.../texgyretermes-regular.otf]:mode=node;script=latn;+tlig;+kern;</code>) —
+features change glyph widths and therefore line breaks.</li>
+<li><code>baselineskip</code>/<code>lineskip</code>/<code>lineskiplimit</code> are glue specs
+<code>[width, stretch, shrink, stretch_order, shrink_order]</code>. They matter because
+the serve engine's <code>\vbox</code> must inter-line-glue its lines exactly as the
+page did.</li>
+<li>The paragraph is attributed to its pgcid via a <strong>TeX attribute</strong> set by the
+<code>\paraid{...}</code> macro the converter emits.</li>
+</ul>
+<p><strong>Hook 2 — after line breaking</strong> (<code>post_linebreak_filter</code>):</p>
+<p>Records the <strong>line signature</strong>: per line <code>{y, h, w, d, g}</code> where <code>g</code> is a
+glyph array <code>[charCode, xOffsetSp, fontId]</code>. Positions are measured with
+<code>node.dimensions</code> — the engine's own arithmetic — so microtype font expansion
+is included to the scaled point.</p>
+<blockquote>
+<p><strong>Gotcha:</strong> naive accumulation of glyph widths is off by up to ±6.5 pt under
+microtype. <code>node.dimensions</code> per node is the engine's answer; if you must
+compute manually, glyph expansion is <code>width × (1 + expansion_factor/1e6)</code>
+but a kern's <code>expansion_factor</code> is an <strong>absolute sp correction</strong>, not a
+ratio.</p>
+</blockquote>
+<blockquote>
+<p><strong>Gotcha (attribute stickiness):</strong> TeX attributes persist until changed.
+Left alone after a paragraph ends, the pgcid attribute bleeds into whatever
+the output routine contributes next — running heads and folio digits
+inherited the last paragraph's id and corrupted its bounding box. <strong>Reset
+the attribute explicitly after each paragraph's post-linebreak processing.</strong></p>
+</blockquote>
+<p><strong>Hook 3 — at shipout</strong> (<code>pre_shipout</code>):</p>
+<p>Walks the finished page with absolute coordinates and records per paragraph:
+<code>page</code> (number), <code>origin</code> <code>[xSp, ySp]</code> (first baseline position, page top-left
+origin), <code>bbox</code> <code>[minX, minY, maxX, maxY]</code>, and <code>split</code> (true if the paragraph
+crosses a column/page).</p>
+<blockquote>
+<p><strong>Gotcha (the vertical-walk rule):</strong> while walking a vertical list,
+vertical advance is accumulated as <strong>height + depth of boxes and resolved
+glue</strong>. <code>node.dimensions</code> on a vlist answers a different question and gives
+wrong positions. This is the single most common porting bug.</p>
+</blockquote>
+<h3>7.2 Capture JSON schema</h3>
+<p>Written to <code>{workspace}/{STEM}-warm-capture.json</code>:</p>
+<pre><code class="language-jsonc">{
+  &quot;paras&quot;: {
+    &quot;para10&quot;: {
+      &quot;ctx&quot;:    { /* the 31 parameters above */ },
+      &quot;sig&quot;:    [ { &quot;y&quot;: 0, &quot;h&quot;: 447611, &quot;d&quot;: 142868, &quot;w&quot;: 31772590,
+                    &quot;g&quot;: [[80, 0, 95], [108, 32768, 95], ...] }, ... ],
+      &quot;page&quot;:   3,
+      &quot;origin&quot;: [3683779, 38192784],
+      &quot;bbox&quot;:   [3683779, 37745173, 35292532, 45386671],
+      &quot;split&quot;:  false
+    }
+  },
+  &quot;pages&quot;:  [ { &quot;w&quot;: 39158276, &quot;h&quot;: 52211034 }, ... ],
+  &quot;fonts&quot;:  { &quot;95&quot;: { &quot;name&quot;: &quot;&lt;luaotfload spec&gt;&quot;, &quot;size&quot;: 655360 } }
+}
+</code></pre>
+<p>All positional units are <strong>sp</strong> (65536 sp = 1 TeX pt). <code>sig[].y</code> values are
+relative to the first baseline (line 1 has <code>y: 0</code>); <code>origin</code> is absolute on
+the page. Font <code>size</code> is the <em>scaled</em> size in sp.</p>
+<hr />
+<h2 id="8-the-serve-engine">8. The serve engine</h2>
+<h3>8.2 Multi-shot, and why that is safe here</h3>
+<p>The serve engine makes the <strong>opposite</strong> trade from the build engine: one
+process serves thousands of requests. Safe because each request typesets one
+paragraph inside</p>
+<pre><code class="language-tex">\setbox0=\vbox{ &lt;context prologue&gt; &lt;paragraph&gt; \par }\directlua{SERVE_RESPOND()}
+</code></pre>
+<p>A box that is <strong>never shipped out</strong> engages no page builder, no float
+placement, no output routine, no marks — none of the machinery that made build
+engines leak (§3.5). The box is measured, reported, and discarded.</p>
+<h3>8.2 Protocol</h3>
+<table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>engine → server</td>
+<td><code>SERVEREADY</code> (after preamble + aux transplant)</td>
+</tr>
+<tr>
+<td>server → engine</td>
+<td>one request per line: a Lua table literal <code>{text=..., ctx=...}</code></td>
+</tr>
+<tr>
+<td>engine → server</td>
+<td>one JSON line: <code>{sig: [...], fonts: {...}}</code> or <code>{error: ...}</code></td>
+</tr>
+</tbody>
+</table>
+<h3>8.3 Context injection</h3>
+<p>The request's <code>ctx</code> (the captured 31 parameters) is compiled into TeX
+assignments <em>inside</em> the <code>\vbox</code>, before the paragraph text: every penalty and
+demerit, the glue specs, <code>\hsize</code>, and a font switch to the captured
+<code>font_name</code>/<code>font_size</code>. The line breaker then sees the paragraph exactly as
+the full build did → identical breakpoints, identical glyph positions, to the
+scaled point.</p>
+<h3>8.4 Aux transplant</h3>
+<p>Paragraphs containing <code>\ref</code>/<code>\cite</code> must resolve without loading the
+document. At engine start, the workspace's <strong>converged aux file</strong> is parsed
+and each <code>\newlabel</code>/<code>\bibcite</code> is installed directly into engine memory via
+<code>token.set_macro(&quot;r@...&quot;)</code> / <code>token.set_macro(&quot;b@...&quot;)</code>.</p>
+<blockquote>
+<p><strong>Gotcha:</strong> feeding <code>\newlabel</code> lines through TeX mid-document is refused by
+LaTeX. <code>token.set_macro</code> bypasses that cleanly.</p>
+</blockquote>
+<h3>8.5 Response comparison and <code>profileChanged</code></h3>
+<p>The engine's fresh <code>sig</code> is compared to the captured one by <strong>vertical
+profile</strong>: the sequence of per-line <code>(h, d)</code> relative to the first baseline.</p>
+<ul>
+<li>Equal profile → the edit <em>provably</em> cannot move anything else on any page
+(the paragraph occupies the same vertical skeleton).</li>
+<li>Different → response carries <code>profileChanged: true</code>; the client shows the
+preview anyway plus a &quot;layout will shift — rebuild to settle&quot; hint.</li>
+</ul>
+<blockquote>
+<p><strong>Gotcha:</strong> compare profiles <strong>first-baseline-relative</strong>. Reference
+signatures from the page carry leading interline glue that a <code>\vbox</code>
+re-typeset cannot reproduce; absolute <code>y</code> comparison always mismatches.</p>
+</blockquote>
+<h3>8.6 Lifecycle</h3>
+<p>Per-article, cap <code>SERVE_ENGINES</code> (default 4), LRU eviction, idle reaper.
+Two concurrency rules learned the hard way:</p>
+<ul>
+<li><strong>Spawn outside the registry lock.</strong> A serve spawn costs ~9 s (preamble).
+Holding the global registry lock during it blocked <em>other articles'</em>
+previews. Pattern: per-article spawn locks; the registry lock is held only
+for map reads/writes; eviction victims are killed outside the lock too.</li>
+<li><strong>Prewarm at article open</strong> (alongside the build engine and capture
+re-registration), so the operator's first keystroke pays ~0.5 s, not ~9 s.</li>
+</ul>
+<h3>8.7 Sanitization</h3>
+<p>The extracted paragraph span is sanitized before typesetting: <code>\end{document}</code>,
+<code>\endinput</code>, <code>\dump</code>, <code>\input</code>/<code>\include</code> are stripped. A half-typed edit must
+never wedge the engine; if one does anyway, the engine is respawned and the
+<em>next</em> preview succeeds (verified by the test battery's engine-kill scenario).</p>
+<hr />
+<h2 id="9-backend-api-surface">9. Backend API surface</h2>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+<th>Warm-specific behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/dataset/{jid}/{aid}/main.xml</code></td>
+<td>GET</td>
+<td>serve article XML</td>
+<td>stamps pgcid (persist-before-serve); triggers prewarm (engine + serve + capture re-registration)</td>
+</tr>
+<tr>
+<td><code>/convert</code></td>
+<td>POST</td>
+<td>enqueue a build</td>
+<td>routes to warm engine on preamble-key hit; cold fallback; supersession</td>
+</tr>
+<tr>
+<td><code>/jobs/{id}</code></td>
+<td>GET</td>
+<td>job status + <code>JobTimings</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>/events</code></td>
+<td>GET (SSE)</td>
+<td>job lifecycle push</td>
+<td>replaces 2 s polling</td>
+</tr>
+<tr>
+<td><code>/dataset/{jid}/{aid}/paragraphs</code></td>
+<td>GET</td>
+<td>per-pgcid geometry from the capture</td>
+<td>409 until a capture exists</td>
+</tr>
+<tr>
+<td><code>/dataset/{jid}/{aid}/paragraph-preview</code></td>
+<td>POST <code>{paraId, xmlData}</code></td>
+<td>the keystroke path</td>
+<td>409 = no capture / warm off (client disables for session); 502 = runtime failure</td>
+</tr>
+<tr>
+<td><code>/dataset/{jid}/{aid}/preview-font/{fontId}</code></td>
+<td>GET</td>
+<td>serve a typeface referenced by a preview</td>
+<td>resolved server-side by engine font id — the client never supplies a path</td>
+</tr>
+<tr>
+<td><code>/metrics</code></td>
+<td>GET</td>
+<td>Prometheus text</td>
+<td>`pgc_compile_stage_ms{path=warm</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Supersession:</strong> each article key tracks its newest queued job. A job checks
+whether it is superseded <em>before and after</em> acquiring the per-article dataset
+lock; superseded jobs return <code>error_tool=&quot;superseded&quot;</code> without compiling.
+Operators who mash the build button cost one compile, not five.</p>
+<p>Preview response schema (what the overlay consumes):</p>
+<pre><code class="language-jsonc">{
+  &quot;paraId&quot;: &quot;para10&quot;,
+  &quot;sig&quot;:    [ /* same line-signature format as the capture */ ],
+  &quot;fonts&quot;:  { &quot;95&quot;: { &quot;name&quot;: &quot;...&quot;, &quot;size&quot;: 655360 } },  // no file paths
+  &quot;page&quot;: 3, &quot;origin&quot;: [x, y], &quot;bbox&quot;: [x0, y0, x1, y1],
+  &quot;split&quot;: false, &quot;profileChanged&quot;: false,
+  &quot;timings&quot;: { &quot;xml2TexMs&quot;: 331.0, &quot;paragraphMs&quot;: 19.9, &quot;totalMs&quot;: 502.1 }
+}
+</code></pre>
+<hr />
+<h2 id="10-the-frontend">10. The frontend</h2>
+<h3>10.1 The keystroke state machine</h3>
+<pre class="mermaid">
+sequenceDiagram
+  participant U as Operator
+  participant H as useParagraphPreview
+  participant M as Monaco
+  participant B as Backend
+  participant O as Overlay
+  U->>H: XML change
+  H->>H: debounce 450ms (reset on every change)
+  H->>M: cursor position NOW (not at keystroke time)
+  H->>H: paragraphAt(xml, offset) -> pgcid
+  H->>B: POST paragraph-preview {paraId, full xml}
+  Note over H: single-flight - a newer edit waits,<br/>then re-resolves cursor + xml
+  B-->>H: 200 {sig, fonts, geometry}
+  H->>O: setActivePreview + ensurePreviewFonts
+  B-->>H: 409
+  Note over H: disable silently for the session
+  B-->>H: error / network
+  Note over H: clear overlay, exponential backoff,<br/>3 retries, then disable
+</pre>
+<p>Key behaviors:</p>
+<ul>
+<li><strong>Cursor is resolved at debounce-fire time</strong>, so the preview follows the
+operator if they moved during the wait.</li>
+<li><strong><code>paragraphAt</code></strong> is a dependency-free string scan (quote-aware tag
+boundaries; skips comments/CDATA/PIs; innermost <code>&lt;p pgcid&gt;</code> wins). No DOM
+parse per keystroke.</li>
+<li><strong>Single-flight:</strong> at most one request in the air; a newer edit re-resolves
+the latest cursor/XML after the in-flight one settles — requests never stack.</li>
+<li><strong>Disable policy:</strong> a 409 (feature off / no capture) disables previews for
+the browser session, silently. Three consecutive transport errors do the
+same after exponential backoff. <em>Operational consequence: after a backend
+restart, reload the tab</em> (see runbook §14).</li>
+<li><strong>Clearing:</strong> the overlay clears when a build lands (the PDF beneath is now
+truth) and on article switch.</li>
+</ul>
+<h3>10.2 Overlay rendering math</h3>
+<p>All engine coordinates are TeX sp; the viewer's <code>zoom</code> is px per <strong>PDF point</strong>.</p>
+<pre><code>px = sp / 65536            // sp -&gt; TeX pt
+   * (72 / 72.27)          // TeX pt -&gt; PDF pt   &lt;- do not skip this
+   * zoom                  // PDF pt -&gt; px
+</code></pre>
+<blockquote>
+<p><strong>Gotcha:</strong> skipping the 72/72.27 factor (0.37%) looks fine near the page
+top and drifts the overlay visibly <strong>down</strong> the page (~2 px mid-page at
+zoom 1) because absolute y-coordinates are large.</p>
+</blockquote>
+<p>Anchoring — the paragraph's first glyph lands exactly on the captured origin,
+everything else is relative to that anchor:</p>
+<pre><code>x0 = origin.x - sig[0].g[0].x      // first glyph's own offset removed
+y0 = origin.y - sig[0].y           // sig y-values are first-baseline-relative
+glyph position = (x0 + glyph.x, y0 + line.y)
+mask top    = origin.y - sig[0].h
+mask bottom = y0 + last.y + last.d
+mask left/right = bbox
+</code></pre>
+<h3>10.3 Baseline-exact text: use SVG</h3>
+<blockquote>
+<p><strong>Gotcha (the &quot;slightly low text&quot; bug):</strong> CSS has no baseline-positioning
+primitive. Absolutely-positioned HTML spans with <code>line-height: 0</code> collapse
+to zero height, so <code>translateY(-100%)</code> is a no-op and the browser
+effectively centers glyphs on the target line — text sits ~0.3 em low.</p>
+</blockquote>
+<p>SVG <code>&lt;text y=...&gt;</code> anchors at the <strong>true alphabetic baseline</strong> natively.
+Implementation details that matter:</p>
+<ul>
+<li>One <code>&lt;text&gt;</code> per <strong>same-font run</strong> per line, with a per-character <code>x</code> list
+(<code>x=&quot;12.3 19.8 26.1 ...&quot;</code>) — exact per-glyph positioning, few DOM nodes.</li>
+<li>Spaces render as NBSP (<code> </code>): SVG whitespace collapsing would silently
+desync the x list.</li>
+<li>Characters outside the BMP get a <strong>solo</strong> <code>&lt;text&gt;</code>: engines disagree on
+whether the x list indexes code units or code points.</li>
+<li>Control/unmappable char codes render as <code>·</code> rather than raw control chars.</li>
+</ul>
+<h3>10.4 Real typefaces</h3>
+<ul>
+<li>The serve engine reports each used font's <strong>file path</strong>
+(<code>font.getfont(id).filename</code> — luaotfload already resolved it when the
+template loaded the font). Fully template-agnostic: no per-template font
+configuration exists anywhere.</li>
+<li>The backend keeps a per-article <code>fontId -&gt; path</code> registry (merged across
+previews) and serves bytes at <code>preview-font/{id}</code>. Paths never come from the
+client; paths never go to the client.</li>
+<li>The browser loads each font once as a <code>FontFace</code> under a deterministic
+family (<code>pgc-prev-{jid}-{aid}-{id}</code>), then SVG runs reference that family
+with a serif fallback. First paint is exact-position fallback; letterforms
+snap to the real face when it loads (~one fetch per font per day, cached).</li>
+<li>Failure mode: a 404/unloadable font (engine respawned, legacy Type1 .pfb)
+leaves the fallback in place at exact positions. Nothing breaks.</li>
+</ul>
+<hr />
+<h2 id="11-concurrency-capacity-multi-tenancy">11. Concurrency, capacity, multi-tenancy</h2>
+<p><strong>Everything warm is keyed per article.</strong> The multi-user matrix:</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Behavior</th>
+<th>Operator sees</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>N operators, different articles, simultaneous builds</td>
+<td>parallel up to 4 build workers, each against its own warm engine</td>
+<td>3–5 s each</td>
+</tr>
+<tr>
+<td>Two operators, same article</td>
+<td>per-article dataset lock serializes; supersession keeps newest</td>
+<td>one compile, newest wins</td>
+</tr>
+<tr>
+<td>Open articles &gt; engine slots (6)</td>
+<td>LRU eviction; evicted article's next build runs cold once while re-warming</td>
+<td>one ~20 s build, then 3–5 s</td>
+</tr>
+<tr>
+<td>Previewing articles &gt; serve slots (4)</td>
+<td>LRU; replacement spawns <strong>outside</strong> the shared lock</td>
+<td>first preview ~0.5 s, then ~0.2 s</td>
+</tr>
+<tr>
+<td>Idle 15 min / overnight</td>
+<td>reapers reclaim engines; workspace survives 24 h</td>
+<td>memory freed, next open prewarms back</td>
+</tr>
+<tr>
+<td>Crash / restart / OOM-kill</td>
+<td>warm state disposable; captures re-register from workspace at next open</td>
+<td>one slower build, never data loss</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Memory model:</strong> a fully warm heavy-template article ≈ 2–3 GB (build engine
+0.3–1.5 GB + serve engine + worker share). Defaults (6 build + 4 serve
+engines, 12 GB container <code>mem_limit</code>) are sized so the worst case fits.
+Capacity planning is <code>concurrently-active articles × 2–3 GB</code> — <strong>by article,
+not by user</strong>.</p>
+<p><strong>Scale-out:</strong> nothing warm is shared between articles, so sharding is
+sticky-routing by article id; each backend owns its warm set; the shared file
+server stays the single source of truth.</p>
+<p><strong>Shared resources (the only globals):</strong> 4 build workers (<code>MAX_WORKERS</code>,
+unchanged from legacy), 1 xml2tex worker (serialized, but 0.3–0.5 s per
+conversion — never the queue), one memory envelope.</p>
+<hr />
+<h2 id="12-configuration-reference">12. Configuration reference</h2>
+<p>All read from the environment at process start (restart required to change).</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WARM_ENGINES</code></td>
+<td><code>0</code></td>
+<td>master flag; <code>1</code> enables the entire warm pipeline</td>
+</tr>
+<tr>
+<td><code>WARM_WORKSPACE_ROOT</code></td>
+<td><code>/var/cache/pgc-editor/workspaces</code></td>
+<td>per-article scratch dirs (container-local unless volume-mounted)</td>
+</tr>
+<tr>
+<td><code>WARM_MAX_ENGINES</code></td>
+<td><code>6</code></td>
+<td>build-engine pool cap</td>
+</tr>
+<tr>
+<td><code>WARM_MAX_WORKSPACES</code></td>
+<td><code>50</code></td>
+<td>workspace cap (LRU)</td>
+</tr>
+<tr>
+<td><code>WARM_ENGINE_IDLE_SECONDS</code></td>
+<td><code>900</code></td>
+<td>build/serve engine idle reap</td>
+</tr>
+<tr>
+<td><code>WARM_WORKSPACE_IDLE_SECONDS</code></td>
+<td><code>86400</code></td>
+<td>workspace idle reap</td>
+</tr>
+<tr>
+<td><code>WARM_ENGINE_READY_TIMEOUT_SECONDS</code></td>
+<td><code>120</code></td>
+<td>max preamble warm time before the spawn is abandoned</td>
+</tr>
+<tr>
+<td><code>XML2TEX_WORKER</code></td>
+<td><code>1</code></td>
+<td>persistent converter worker on/off</td>
+</tr>
+<tr>
+<td><code>XML2TEX_WORKER_MAX_RSS</code> / <code>_MAX_REQS</code></td>
+<td>—</td>
+<td>worker recycling thresholds</td>
+</tr>
+<tr>
+<td><code>PGCID_STAMPING</code></td>
+<td><code>1</code></td>
+<td>load-time paragraph id stamping (2.0 customers)</td>
+</tr>
+<tr>
+<td><code>PARA_CAPTURE</code></td>
+<td><code>1</code></td>
+<td>capture during warm builds</td>
+</tr>
+<tr>
+<td><code>SERVE_ENGINES</code></td>
+<td><code>4</code></td>
+<td>serve-engine cap (LRU)</td>
+</tr>
+<tr>
+<td><code>MAX_WORKERS</code></td>
+<td><code>4</code></td>
+<td>build worker threads (legacy, unchanged)</td>
+</tr>
+<tr>
+<td><code>COMPILE_TIMEOUT_SECONDS</code></td>
+<td><code>180</code></td>
+<td>per-compile ceiling</td>
+</tr>
+<tr>
+<td><code>BACKEND_MEM_LIMIT</code> (compose)</td>
+<td><code>12g</code></td>
+<td>container memory ceiling</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Deployment gotcha:</strong> if you run from an alternate compose file
+(<code>docker-compose-local.yml</code> etc.), the <code>environment:</code> passthrough block must
+exist in <em>that</em> file too. A recreated container without these vars runs the
+legacy cold path <strong>silently</strong> — builds work, they're just slow, and
+<code>paragraph-preview</code> 409s. First diagnostic: check the container env, not the
+code.</p>
+</blockquote>
+<hr />
+<h2 id="13-correctness-and-testing">13. Correctness and testing</h2>
+<ul>
+<li><strong>Golden gate:</strong> the same article is compiled cold and warm; the generated
+<code>.tex</code> must be equivalent (one known timestamp normalized) and the PDFs must
+have identical text content. This gates the flag per customer.</li>
+<li><strong>Fidelity method (research phase):</strong> glyph-position comparison to <strong>zero
+scaled points</strong> across four template families (elsarticle, IEEEtran, acmart,
+cas-dc): 10/12 body paragraphs byte-exact per template; the two exceptions
+are the predicted footnote/display-math boundaries.</li>
+<li><strong>Unit suite:</strong> 33 tests (<code>backend/tests/test_warm_pipeline.py</code>) covering
+split/keying, stamper parity and masking, supersession, capture indexing,
+preview orchestration; plus a golden e2e test gated by
+<code>PGC_GOLDEN_DATASET=customer:jid:aid</code> runnable against any dataset copy.</li>
+<li><strong>Preview battery:</strong> <code>scripts/preview-smoke.py</code> — 14 scenarios: unmodified
+parity (exact glyph positions), growth edits + <code>profileChanged</code>, 10
+sequential previews (latency stability), multiple paragraphs, unknown id,
+hostile mid-edit input, engine-death recovery. All against a <strong>copy</strong> of a
+production dataset; production data is never touched by tests.</li>
+<li><strong>Runtime canary:</strong> <code>pgc_warm_events_total{event=&quot;fallback&quot;}</code> — the rollout
+health signal. Rising fallback = warm path failing somewhere while operators
+silently get correct-but-slow builds.</li>
+</ul>
+<p><strong>Known boundaries (by design):</strong> paragraphs whose typesetting depends on
+machinery a <code>\vbox</code> cannot reproduce are not eligible for preview — footnotes,
+display math, list items, float captions (the wrapper macro switches fonts
+mid-stream). They take the 3–5 s build path. Detect-and-route-explicitly is a
+future lever.</p>
+<hr />
+<h2 id="14-operational-runbook">14. Operational runbook</h2>
+<h3>After any backend restart</h3>
+<ol>
+<li><strong>Reload the browser tab.</strong> The preview hook disables itself for the
+session after 409s/errors (which naturally occur while the backend is
+down). The flag lives in the page; only a reload resets it.</li>
+<li><strong>Open the article; run one build</strong> if the container was <em>recreated</em>
+(fresh filesystem → no capture). A plain stop/start keeps workspaces, and
+opening the article re-registers the capture automatically.</li>
+<li>Type in a paragraph → overlay in ~0.2–0.5 s.</li>
+</ol>
+<p>Restart order: <strong>backend first, browser reload last.</strong></p>
+<h3>30-second diagnosis</h3>
+<pre><code class="language-bash"># flags actually present in the running container?
+docker inspect mr-bean-backend --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -E &quot;WARM_ENGINES|PARA_CAPTURE|SERVE_ENGINES&quot;
+
+# builds hitting the warm path?
+curl -s localhost:18080/metrics | grep warm_events
+
+# engines resident right now?
+docker exec mr-bean-backend sh -c 'ps aux | grep -c [l]ualatex'
+
+# capture present for an article?
+docker exec mr-bean-backend ls /var/cache/pgc-editor/workspaces/&lt;cust&gt;/&lt;JIDaid&gt;/
+</code></pre>
+<p>Browser Network tab, <code>paragraph-preview</code> request:
+<strong>200</strong> = working · <strong>409</strong> = no capture yet (build once, then reload tab) ·
+<strong>no request at all</strong> = session-disabled (reload tab).</p>
+<h3>Symptom table</h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Builds 12–25 s, no warm events in metrics</td>
+<td>flag/env missing in container (wrong compose file, stale container)</td>
+<td>fix env, recreate container</td>
+</tr>
+<tr>
+<td>First build after open ~20 s, rest fast</td>
+<td>prewarm hadn't finished — by design</td>
+<td>none; or wait ~15 s after open</td>
+</tr>
+<tr>
+<td>Preview 409 forever</td>
+<td>no capture (recreated container, never built)</td>
+<td>one build</td>
+</tr>
+<tr>
+<td>Preview worked, then silently stopped</td>
+<td>session disable after backend restart</td>
+<td>reload tab</td>
+</tr>
+<tr>
+<td>Overlay text slightly below print</td>
+<td>missing 72/72.27 pt conversion, or HTML-span baseline hack</td>
+<td>use SVG text + the factor (§10)</td>
+</tr>
+<tr>
+<td>Engine wrote no capture, no error</td>
+<td>absolute capture path rejected by <code>openout_any=p</code></td>
+<td>relative path</td>
+</tr>
+<tr>
+<td>Backend crash-loop on import</td>
+<td>Python-version syntax mismatch (container 3.10 vs dev 3.12 — e.g. backslash in f-string)</td>
+<td><code>docker exec ... python3 -m compileall /app/app</code> before shipping</td>
+</tr>
+<tr>
+<td>PDF truncated/invalid from warm build</td>
+<td>engine was killed instead of QUIT, or stdout not drained during shutdown</td>
+<td>graceful quit + reader thread to EOF</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="15-the-full-gotcha-catalog">15. The full gotcha catalog</h2>
+<p>Condensed, hard-won, in one place. Engine-side:</p>
+<ol>
+<li>Single-shot build engines: template float/tagging state leaks across body
+re-runs (run 2 lost figure pages); register snapshots insufficient.</li>
+<li>QUIT, don't kill: <code>\end{document}</code> writes the PDF trailer.</li>
+<li>One dedicated stdout reader thread per process, spawn to EOF; bounded
+stderr drain. Full pipes block engines, two readers race.</li>
+<li><code>openout_any=p</code> rejects absolute output paths silently → relative paths.</li>
+<li>Templates may nil <code>debug</code>; locate Lua files via kpse/embedding.</li>
+<li>Nested plain-TeX <code>\loop</code> for the serve loop breaks; keep it top-level.</li>
+<li>Preamble format dump (<code>\dump</code> + custom format) fails under luaotfload
+(66 MB format, no output) — warm <em>processes</em>, not format files.</li>
+<li><code>\paraid</code> must be <strong>chained</strong> (wrap the template's own definition), not
+replaced — production templates define it themselves.</li>
+</ol>
+<p>Measurement-side:</p>
+<ol start="9">
+<li><code>node.dimensions</code> for horizontal glyph positions (microtype-exact); manual
+accumulation is ±6.5 pt off. Kern <code>expansion_factor</code> is absolute sp.</li>
+<li>Vertical walks: accumulate h+d of boxes and resolved glue; never
+<code>node.dimensions</code> on a vlist.</li>
+<li>TeX attributes are sticky — reset after each paragraph or folio glyphs
+inherit the id and corrupt bboxes.</li>
+<li>Compare vertical profiles first-baseline-relative (page lines carry
+interline glue a <code>\vbox</code> can't reproduce).</li>
+<li>Capture <code>baselineskip</code>/<code>lineskip</code>/<code>lineskiplimit</code> — without them the
+serve <code>\vbox</code> leading is off by ~0.9 pt.</li>
+</ol>
+<p>Converter/identity-side:</p>
+<ol start="14">
+<li>Full-document conversion for previews; paragraph-isolated conversion
+breaks byte parity (converter is document-scoped).</li>
+<li>Stamper must mask comments/CDATA/PIs and stamp self-closing <code>&lt;p/&gt;</code> too
+(vendor parity).</li>
+<li>xml2tex 1.x: numbering not idempotent without a small patch; un-awaited
+<code>shouldReprocess()</code> re-compiles templates every run.</li>
+</ol>
+<p>Frontend-side:</p>
+<ol start="17">
+<li>sp → pt → <strong>bp</strong> → px; the 72/72.27 factor is not optional.</li>
+<li>Baseline positioning needs SVG text; CSS spans cannot do it.</li>
+<li>NBSP for spaces in SVG x-lists; solo runs for non-BMP chars.</li>
+<li>409 → session disable means &quot;reload the tab after backend restarts&quot; —
+or soften the policy (re-probe after next successful build).</li>
+</ol>
+<p>Deployment-side:</p>
+<ol start="21">
+<li>Dev venv 3.12 vs container 3.10: syntax that parses locally can crash the
+container (<code>compileall</code> inside the container before shipping).</li>
+<li>Alternate compose files need the env passthrough too; a container without
+the flags degrades <strong>silently</strong> to cold.</li>
+<li>uvicorn without <code>--reload</code> + bind-mounted code = new code only on
+container restart; <code>docker compose restart</code> does not re-read compose env
+(recreate via <code>up -d</code> for env changes).</li>
+</ol>
+<hr />
+<h2 id="16-porting-guide-integrating-on-another-platform">16. Porting guide: integrating on another platform</h2>
+<h3>16.1 What is generic vs. what is TNQ-specific</h3>
+<p><strong>Generic (port as-is):</strong></p>
+<ul>
+<li>The warm-engine harness + protocol (§3) — works with any LuaLaTeX document
+that splits at <code>\begin{document}</code>.</li>
+<li>The pool/prewarm/reaper/fallback pattern (§4).</li>
+<li>The capture module's three hooks and schema (§7) — pure LuaTeX callbacks.</li>
+<li>The serve engine (§8) — context injection, aux transplant, profile compare.</li>
+<li>The overlay math and SVG rendering (§10).</li>
+<li>The concurrency model (§11) and all of §15.</li>
+</ul>
+<p><strong>Platform-specific (re-implement per platform):</strong></p>
+<ul>
+<li>The converter warm-ification (§5): whatever produces TeX from your source
+format needs its own &quot;load once, transform many&quot; server wrapper. The NDJSON
+discipline transfers; the internals don't.</li>
+<li>Paragraph identity (§6): you need <em>some</em> stable id that survives your
+converter — attribute stamping, block ids, CMS node ids.</li>
+<li>The paragraph wrapper markup: we locate spans by <code>\paraid{...}</code>; your
+converter must emit <em>something</em> findable around each unit of text.</li>
+<li>Editor integration: cursor→id resolution is format-specific (our string
+scan is XML-specific).</li>
+</ul>
+<h3>16.2 The five contracts a port must satisfy</h3>
+<ol>
+<li><strong>Splittable output:</strong> generated TeX separates into (preamble, body) at a
+deterministic point, and the preamble is stable across small edits.</li>
+<li><strong>Stable unit identity:</strong> every editable unit (paragraph) has an id that is
+identical in the source, in the generated TeX, and across edits/sessions.</li>
+<li><strong>Locatable spans:</strong> given an id, the unit's TeX span can be extracted from
+the generated TeX by string search (converter emits delimiting markup).</li>
+<li><strong>Deterministic converter:</strong> same source → same TeX bytes (or the golden
+gate cannot work).</li>
+<li><strong>A file-server source of truth</strong> that survives the death of everything
+warm.</li>
+</ol>
+<p>If you can satisfy those five, everything else in this guide follows
+mechanically.</p>
+<h3>16.3 Suggested build order (matches our phase structure)</h3>
+<ol>
+<li><strong>Phase 1 — warm builds:</strong> split/keying, harness, pool, prewarm-on-open,
+converter worker, golden gate, metrics, flag + cold fallback.
+<em>Exit criterion: golden-identical output, 3–6× faster builds.</em></li>
+<li><strong>Phase 2a — identity:</strong> stamping/parity with your converter's numbering.
+<em>Exit criterion: N/N id parity on a real document; 0 shifts on insertion.</em></li>
+<li><strong>Phase 2b — capture:</strong> the three hooks; verify against real pages
+(attribute reset! vertical-walk rule!).
+<em>Exit criterion: every body paragraph captured with correct page/origin/bbox.</em></li>
+<li><strong>Phase 2c — serve engine:</strong> context injection, aux transplant, parity
+battery (aim: exact glyph positions on unmodified paragraphs).</li>
+<li><strong>Phase 2d — overlay:</strong> SVG rendering, debounce/single-flight, fonts.</li>
+</ol>
+<p>Do not skip the golden gate or the battery — every shortcut here surfaced a
+real bug for us (folio attribute bleed, vbox leading, pt/bp drift, span
+baseline hack).</p>
+<h3>16.4 Sizing a new deployment</h3>
+<ul>
+<li>Measure one article's warm footprint on <em>your</em> templates (ours: 2–3 GB
+heavy, 0.3 GB light).</li>
+<li><code>WARM_MAX_ENGINES + SERVE_ENGINES</code> × footprint &lt; container limit, with
+headroom for the cold path (which still runs on misses).</li>
+<li>Start flag-off; enable per customer behind the golden gate; watch the
+fallback counter.</li>
+</ul>
+<hr />
+<h2 id="17-future-work-levers">17. Future work levers</h2>
+<p>Ordered by measured impact:</p>
+<ol>
+<li><strong>Conversion caching for previews</strong> — xml2tex dominates preview latency
+(~400 of ~500 ms). Skip conversion when nothing outside the edited
+paragraph changed → previews at ~50–100 ms. Optimization, not redesign.</li>
+<li><strong>Explicit boundary routing</strong> — detect cursor-in-footnote/display-math and
+tell the operator, instead of silently taking the build path.</li>
+<li><strong>Images/rules in the preview region</strong> — the capture already records where
+they are; the overlay could draw placeholders or crops.</li>
+<li><strong>Background convergence over SSE</strong> — push fresh page geometry as builds
+complete, realizing the full tiered model of the research paper.</li>
+<li><strong>Softened session-disable</strong> — re-probe previews after the next successful
+build instead of requiring a tab reload.</li>
+<li><strong>Workspace volume</strong> — persist workspaces across container recreates so
+even those keep captures warm.</li>
+</ol>
+<hr />
+<h2 id="18-file-map">18. File map</h2>
+<pre><code>mr-bean (branch feature/warm-pipeline)
+├── backend/app/
+│   ├── compiler.py                 # worker pool, warm routing, WarmRuntime,
+│   │                               #   prewarm_article, supersession, serve registry
+│   ├── config.py                   # all env knobs (§12)
+│   ├── main.py                     # endpoints (§9), pgcid stamping hook, SSE
+│   ├── job_store.py                # JobEventBus, DatasetLockRegistry
+│   └── warm/
+│       ├── engine_pool.py          # split_tex, preamble_key, WarmEngine, EnginePool
+│       ├── warm-engine.lua         # build-engine harness (§3)
+│       ├── capture-mrbean.lua      # the three hooks (§7)
+│       ├── serve-mrbean.lua        # serve engine (§8)
+│       ├── serve_engine.py         # serve process wrapper
+│       ├── preview.py              # keystroke orchestrator (§5.1, §8)
+│       ├── pgcid.py                # load-time stamper (§6)
+│       ├── workspace.py            # WorkspaceManager
+│       ├── xml2tex_worker.js       # persistent converter worker (§5)
+│       ├── xml2tex_client.py       # NDJSON client, reader thread, recycling
+│       └── metrics.py              # stdlib Prometheus text
+├── backend/tests/test_warm_pipeline.py
+├── scripts/warm-smoke.py           # cold-vs-warm golden harness
+├── scripts/preview-smoke.py        # 14-scenario preview battery
+└── frontend/src/
+    ├── utils/paragraphAt.ts        # cursor offset -&gt; pgcid
+    ├── utils/previewFonts.ts       # FontFace loading (§10.4)
+    ├── hooks/useParagraphPreview.ts# debounce / single-flight / disable
+    ├── services/api/paragraphPreviewApi.ts
+    ├── types/paragraphPreview.types.ts
+    └── components/pdf/ParagraphPreviewOverlay.tsx  # SVG overlay (§10.2-10.3)
+
+realtime-luatex-research (branch production-flow)
+├── prototype/                      # the research reference implementation
+├── paper/                          # both articles + TikZ figures
+└── docs-production/                # architecture docs, this guide, brief
+</code></pre>
+<hr />
+<p><em>Prepared from the realtime-luatex-research program and the mr-bean
+<code>feature/warm-pipeline</code> implementation. All latency figures measured on
+production datasets. Questions → Srikanth Mohankumar (TNQ Tech).</em></p>
+
+</main>
+</body>
+</html>
