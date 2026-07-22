@@ -1,0 +1,130 @@
+% Executive summary of the PGC Editor warm pipeline — two pages,
+% one column, for product stakeholders and the senior architect.
+% Full technical treatment: pgc-warm-pipeline.tex (same directory).
+\documentclass[10pt]{article}
+\usepackage[a4paper, margin=23mm, bottom=26mm]{geometry}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.8em}{}
+\titlespacing{\section}{0pt}{14pt}{5pt}
+\setlist{nosep, leftmargin=1.4em}
+\setlength{\parskip}{4pt}\setlength{\parindent}{0pt}
+\def\LuaTeX{Lua\TeX}
+\def\LuaLaTeX{Lua\LaTeX}
+\def\cs#1{\texttt{\char`\\#1}}
+
+\begin{document}
+
+{\LARGE\bfseries The PGC Editor warm pipeline}\\[2pt]
+{\large Executive summary for architecture review}\\[4pt]
+{\small Srikanth Mohankumar · TNQ Tech · July 2026 ·
+full article: \texttt{pgc-warm-pipeline.pdf}}
+
+\vspace{2pt}\hrule\vspace{6pt}
+
+\section*{What changed}
+
+Every correction in the PGC Editor used to pay a full, stateless
+XML$\,\to\,$\TeX$\,\to\,$PDF pipeline: 18--25\,s per build, of which
+about 72\% was the \TeX{} template preamble --- work that never depends
+on the edit. The warm pipeline keeps that work \emph{resident in
+processes} instead of redoing it:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lccl@{}}
+\toprule
+Operator action & before & after & how\\
+\midrule
+Build a correction & 18--25\,s & \textbf{3--5\,s} &
+  preamble-resident \LuaTeX{} engine, warm converter\\
+Check a keystroke & a full build & \textbf{$\sim$0.2\,s} &
+  one paragraph re-typeset, drawn live over the PDF\\
+Output fidelity & --- & identical &
+  golden-gated: equivalent \texttt{.tex}, identical PDF text\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Measured on production articles: ACS 18.8\,s$\to$4.7\,s (4.0$\times$),
+Sage 22.5\,s$\to$3.1\,s (7.3$\times$), operator-observed in the live
+editor 22.7\,s$\to$4.1\,s. Paragraph previews: 164\,ms median,
+line-break-identical to the full build to the scaled point.
+
+\section*{How it works, in one paragraph each}
+
+\textbf{Warm build engines.} A Lua harness turns \texttt{lualatex} into
+a server: it typesets the article's preamble once, then waits on a pipe.
+A build sends only the document body; the engine typesets it exactly as
+a normal run would and exits cleanly, producing a valid PDF. Engines are
+deliberately \emph{single-shot} --- production templates leak float and
+tagging state across body re-runs (verified: a second run silently lost
+figure pages) --- so every build gets first-run semantics by
+construction, and a replacement engine prewarms in the background while
+the operator reads the result.
+
+\textbf{Keystroke previews.} During each warm build the engine also
+records, per paragraph, its full typesetting context ($\sim$25
+line-breaking parameters, the active font, page position). A separate
+per-article \emph{serve} engine can then re-typeset any single
+paragraph inside an unshipped box in $\sim$10--100\,ms --- safe to
+reuse thousands of times because no page-building machinery ever runs
+--- and the browser draws the returned glyphs over the stale PDF at
+engine-exact positions while the operator types. The next real build
+replaces the overlay with truth.
+
+\begin{center}
+\resizebox{0.98\textwidth}{!}{\input{figs/pgc-architecture.tikz}}
+\end{center}
+
+\section*{Multi-user behavior and capacity}
+
+All warm state is keyed \textbf{per article, never per user}, so
+operators on different articles share nothing warm; four builds run in
+parallel (as today), each 3--5\,s. Two operators on the same article
+serialize on the existing per-article lock, and only the newest queued
+build compiles. Capacity planning is by article: a fully warm heavy
+article costs 2--3\,GB, engines are hard-capped (6 build + 4 serve)
+with LRU eviction and idle reapers, inside an explicit 12\,GB container
+limit. Overflow degrades to a one-time cold build, never an error.
+Beyond one host, articles shard cleanly: sticky-route by article id;
+the file server stays the single source of truth.
+
+\section*{Why it is safe}
+
+\begin{itemize}
+\item \textbf{Cold path never removed} --- any warm miss or failure
+  falls back automatically; worst case equals current behavior.
+\item \textbf{Warm state is disposable} --- engines, workspaces and
+  captures are caches over the file server; a crash or OOM kill costs
+  one slower build, never data.
+\item \textbf{Output-identical, gated per customer} --- an automated
+  cold-vs-warm golden comparison guards the flag
+  (\texttt{WARM\_ENGINES}); scope is xml2tex2.0 customers, Elsevier/1.x
+  untouched.
+\item \textbf{Observable and tested} --- \texttt{/metrics} exports
+  warm/cold per-stage histograms with a fallback-rate canary; 33-test
+  suite plus a 14-scenario end-to-end battery (parity, hostile input,
+  engine-death recovery), all passing.
+\item \textbf{Known limits are explicit} --- footnotes, display math,
+  list items and float captions skip the preview fast path and take the
+  normal 3--5\,s build; preview glyph \emph{positions} are exact, the
+  rendered faces are approximate until the next build.
+\end{itemize}
+
+\section*{Status and decision points}
+
+All four phases are implemented and verified on branch
+\texttt{feature/warm-pipeline} (backend engine pool, load-time
+paragraph identity, capture, preview endpoint, live overlay). Proposed
+next steps: (1)~QA rollout with \texttt{WARM\_ENGINES=1} for one
+xml2tex2.0 customer, watching the fallback canary; (2)~capacity sign-off
+on the 12\,GB envelope per backend; (3)~decision on sharding ---
+sticky-by-article routing when we scale past one host.
+
+\end{document}

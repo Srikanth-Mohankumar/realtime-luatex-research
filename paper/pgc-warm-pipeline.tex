@@ -67,9 +67,10 @@ also completely stateless. Every build paid:
 \end{itemize}
 
 An operator who fixes a hyphen waits exactly as long as one who
-rewrites a section. The fix is not a faster compiler --- \LuaTeX{}'s
-line breaker needs microseconds per paragraph~\cite{lode:realtime} ---
-but an architecture that stops discarding state between builds.
+rewrites a section. The fix is not a faster compiler --- Knuth--Plass line
+breaking~\cite{knuth:linebreak} needs microseconds per
+paragraph~\cite{lode:realtime} --- but an architecture that stops
+discarding state between builds.
 
 \section{Design rules}
 
@@ -251,7 +252,10 @@ A warm build is also a measurement opportunity: the engine is
 typesetting every paragraph anyway, so recording \emph{how} costs
 almost nothing. When the pool passes a capture path with
 \texttt{RUN}, the harness loads a capture module that hooks three
-points in \LuaTeX's typesetting pipeline:
+points in \LuaTeX's typesetting pipeline through its callback
+interface~\cite{luatex:manual} --- the same mechanism packages such as
+\textsf{lua-widow-control}~\cite{chernoff:lwc} use to manipulate
+paragraphs at typesetting time:
 
 \begin{description}
 \item[Before line breaking] (\texttt{pre\_linebreak\_filter} together
@@ -307,7 +311,9 @@ as the full build did. Cross-references and citations are transplanted
 from the workspace's converged aux file directly into engine memory
 (\texttt{token.set\_macro} on the \texttt{r@}/\texttt{b@} macros), so a
 paragraph containing \cs{ref} or \cs{cite} resolves correctly without
-ever loading the document.
+ever loading the document. (Making cross-references single-pass by
+construction is a related line of work; see
+\textsf{monoref}~\cite{srik:monoref}.)
 
 The response is the same line-signature JSON the capture produces,
 which enables the key comparison: if the edited paragraph's
@@ -482,11 +488,40 @@ seconds, true PDF shortly after --- is fully realized in the product.
 
 \SetBibJustification{\raggedright}
 \begin{thebibliography}{9}
+\bibitem{knuth:linebreak}
+Donald~E. Knuth and Michael~F. Plass.
+\newblock Breaking paragraphs into lines.
+\newblock \emph{Software: Practice and Experience}, 11(11):1119--1184,
+  1981.
+
 \bibitem{lode:realtime}
 Clemens Lode.
 \newblock Real-time \LuaTeX{}: Recompiling large documents in 1\,ms.
 \newblock TUG 2026 preprint,
   \url{https://tug.org/tug2026/preprints/lode-realtime.pdf}, 2026.
+
+\bibitem{luatex:manual}
+The \LuaTeX{} development team.
+\newblock \emph{\LuaTeX{} Reference Manual}, version 1.22.
+\newblock \url{https://www.luatex.org/documentation.html}, 2025.
+
+\bibitem{thanh:thesis}
+Hàn Thế Thành.
+\newblock \emph{Micro-typographic extensions to the \TeX{} typesetting
+  system}.
+\newblock PhD thesis, Masaryk University, Brno, 2000.
+
+\bibitem{chernoff:lwc}
+Max Chernoff.
+\newblock Automatically removing widows and orphans with
+  \textsf{lua-widow-control}.
+\newblock \emph{TUGboat}, 43(1):28--39, 2022.
+
+\bibitem{srik:monoref}
+Srikanth Mohankumar.
+\newblock \textsf{monoref}: single-pass cross-references for
+  \LuaLaTeX{}.
+\newblock CTAN, \url{https://ctan.org/pkg/monoref}, 2026.
 
 \bibitem{srik:eventually}
 Srikanth Mohankumar.
