@@ -730,14 +730,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
 
     def _post(self):
+        route = self.path.split("?", 1)[0]   # UI posts carry ?doc=...
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or "{}")
         d = get_doc(body["doc"])
-        if self.path == "/api/compile":
+        if route == "/api/compile":
             self.send_json(d.compile(body["id"], body["text"]))
-        elif self.path == "/api/source":
+        elif route == "/api/source":
             self.send_json(d.update_source(body["source"]))
-        elif self.path == "/api/restart":
+        elif route == "/api/restart":
             with d.lock:
                 d.respawn()
             self.send_json({"ok": True})
