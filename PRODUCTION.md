@@ -16,6 +16,16 @@ IEEEtran sample article; everything production-specific lands here.
 - Memory: ~2.4-3 GB per open article (3 resident engines); knobs
   RT_POOL / RT_SESSIONS / RT_IDLE_MIN
 
+## Target system: mr-bean (PGC Editor) — surveyed 2026-07-22
+
+Full architecture + phased plan: docs-production/mr-bean-realtime-architecture.md
+Headline: the 20 s conversion is cold-start at every stage (fresh node
+xml2tex + fresh lualatex per job, nothing cached); Phase 1 (warm engine
+pool + persistent xml2tex worker + persistent workspace + SSE) targets
+4-6 s; Phase 2 brings the paragraph fast path + viewer overlays. paraid
+stability is achievable via pgcid pre-staging (xml2tex2.0 numbering is
+idempotent).
+
 ## Open items awaiting input
 
 - [ ] Which pipeline stage hosts the editor (watcher? correction UI?)
