@@ -124,6 +124,16 @@
   .legend .l-cold::before { background: var(--cold); }
   .legend .l-warm::before { background: var(--warm); }
 
+  /* multi-tenancy lanes */
+  .tenancy { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-top: 20px; }
+  .lane { border: 1px dashed var(--hairline); border-radius: 12px; padding: 14px; display: grid; gap: 10px; align-content: start; background: color-mix(in oklab, var(--card) 45%, var(--paper)); }
+  .lane-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .lane-head b { font-size: 13.5px; }
+  .lane-head .op { font-size: 11.5px; color: var(--muted); }
+  .shared-band { margin-top: 16px; border: 1px solid var(--hairline); border-radius: 12px; padding: 14px; background: var(--card); }
+  .shared-band .eyebrow { margin-bottom: 10px; }
+  .shared-band .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+
   .rails { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 18px; }
   .rail { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; padding: 16px 18px; }
   .rail b { font-size: 14px; }
@@ -239,6 +249,84 @@
       hard-capped with idle reapers, and the container now runs under an explicit
       <code>mem_limit</code>. One heavy-template article &asymp; 2–3&thinsp;GB resident; the light demo
       article &asymp; 0.3&thinsp;GB.
+    </p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Concurrency &amp; capacity</div>
+    <h2>Many operators, many articles</h2>
+    <p class="lede">All warm state is keyed <b>per article, never per user</b>. Operators on
+      different articles never touch each other&rsquo;s engines; operators on the same
+      article share one warm set and one build queue slot. Below: four operators,
+      three articles, exactly what each one gets.</p>
+
+    <div class="tenancy">
+      <div class="lane">
+        <div class="lane-head"><b>ACS · AM4c13605</b><span class="op">operator A</span></div>
+        <div class="node hot"><b>Warm engine</b><span>preamble resident — builds in 4.7&thinsp;s</span></div>
+        <div class="node hot"><b>Serve engine</b><span>keystroke previews, ~0.2&thinsp;s</span></div>
+        <div class="node store"><b>Workspace + capture</b><span>aux files converged, geometry per paragraph</span></div>
+      </div>
+      <div class="lane">
+        <div class="lane-head"><b>Sage · CCH1434288</b><span class="op">operator B</span></div>
+        <div class="node hot"><b>Warm engine</b><span>its own — builds in 3.1&thinsp;s</span></div>
+        <div class="node hot"><b>Serve engine</b><span>its own — previews unaffected by A</span></div>
+        <div class="node store"><b>Workspace + capture</b><span>independent of every other article</span></div>
+      </div>
+      <div class="lane">
+        <div class="lane-head"><b>Sage · CCH1434301</b><span class="op">operators C&thinsp;+&thinsp;D</span></div>
+        <div class="node hot"><b>One shared warm set</b><span>builds serialize on the per-article lock; if both press Build, only the <b>newest</b> compiles (supersession) — same rule as today</span></div>
+        <div class="node store"><b>One workspace</b><span>last completed build is the article&rsquo;s state, as now</span></div>
+      </div>
+    </div>
+
+    <div class="shared-band">
+      <div class="eyebrow">Shared by everyone — the only global resources</div>
+      <div class="row">
+        <div class="node"><b>4 build workers</b><span>same as today (<span class="mono">MAX_WORKERS</span>) — four articles compile at once; a fifth queues for seconds now, not half a minute</span></div>
+        <div class="node"><b>1 xml2tex worker</b><span>persistent, serialized — but each conversion is 0.3–0.5&thinsp;s, so it never becomes the queue</span></div>
+        <div class="node"><b>One memory envelope</b><span>container <span class="mono">mem_limit</span> 12&thinsp;GB; a fully-warm heavy article &asymp; 2–3&thinsp;GB, so caps are sized to fit</span></div>
+      </div>
+    </div>
+
+    <div class="tablewrap"><table>
+      <tr><th>Situation</th><th>What the system does</th><th class="num">Operator sees</th></tr>
+      <tr><td>2–4 operators build different articles at once</td><td>each build runs in its own worker against its own warm engine — no interaction</td><td class="num">3–5&thinsp;s each</td></tr>
+      <tr><td>Two operators build the <em>same</em> article</td><td>per-article lock serializes; older queued build returns &ldquo;superseded&rdquo;</td><td class="num">one compile, newest wins</td></tr>
+      <tr><td>More open articles than warm slots (<span class="mono">WARM_MAX_ENGINES</span>&thinsp;=&thinsp;6)</td><td>least-recently-used article&rsquo;s engine is evicted; its next build runs cold once while a fresh engine warms behind it</td><td class="num">one 20&thinsp;s build, then 3–5&thinsp;s again</td></tr>
+      <tr><td>More previewing articles than serve slots (<span class="mono">SERVE_ENGINES</span>&thinsp;=&thinsp;4)</td><td>LRU eviction; spawning a replacement happens <em>outside</em> the shared lock, so it never blocks another article&rsquo;s preview</td><td class="num">first preview ~0.5&thinsp;s, then ~0.2&thinsp;s</td></tr>
+      <tr><td>Operator idles 15 minutes / overnight</td><td>idle reapers reclaim the engines; the disk workspace survives 24&thinsp;h, so the next open prewarms straight back to warm</td><td class="num">memory freed, no data lost</td></tr>
+      <tr><td>Backend restarts or an engine is OOM-killed</td><td>warm state is disposable by design — the file server holds all truth; captures re-register from the workspace at next open</td><td class="num">one slower build, never data loss</td></tr>
+    </table></div>
+
+    <p class="lede" style="margin-top:26px"><b>The same rush hour, before and after.</b> Four operators press
+      Build within the same minute, four different articles. The old pipeline also ran
+      them in parallel — the difference is what each person waits for, and that
+      keystroke checking no longer requires a build at all.</p>
+    <div class="cmp" style="margin-top:14px">
+      <!-- scale: 24.5s = 100%, same axis as the build chart above -->
+      <div class="cmp-article">
+        <div class="name">Before — every operator pays the full cold pipeline, every build; checking a fix = another 20&thinsp;s build</div>
+        <div class="bar-row"><div class="who">op A</div><div class="bar-track"><span class="bar" style="width:83%; background:var(--cold)"></span><span class="bar-val">~20&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">op B</div><div class="bar-track"><span class="bar" style="width:88%; background:var(--cold)"></span><span class="bar-val">~22&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">op C</div><div class="bar-track"><span class="bar" style="width:80%; background:var(--cold)"></span><span class="bar-val">~19&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">op D</div><div class="bar-track"><span class="bar" style="width:86%; background:var(--cold)"></span><span class="bar-val">~21&thinsp;s</span></div></div>
+      </div>
+      <div class="cmp-article">
+        <div class="name">After — each build hits its article&rsquo;s own warm engine; keystrokes preview in ~0.2&thinsp;s without building</div>
+        <div class="bar-row"><div class="who">op A</div><div class="bar-track"><span class="bar" style="width:19%; background:var(--warm)"></span><span class="bar-val">4.7&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">op B</div><div class="bar-track"><span class="bar" style="width:13%; background:var(--warm)"></span><span class="bar-val">3.1&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">op C</div><div class="bar-track"><span class="bar" style="width:16%; background:var(--warm)"></span><span class="bar-val">~4&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">op D</div><div class="bar-track"><span class="bar" style="width:18%; background:var(--warm)"></span><span class="bar-val">~4.5&thinsp;s</span></div></div>
+      </div>
+      <div class="legend"><span class="l-cold">cold pipeline (before)</span><span class="l-warm">warm pipeline (after)</span></div>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin-top:12px">
+      Scaling out is by article count, not user count: capacity planning is
+      <span class="mono">concurrently-active articles &times; 2–3&thinsp;GB</span> against the container&rsquo;s
+      memory envelope. Beyond one host, articles shard cleanly across backends because
+      nothing warm is shared between articles — sticky-route by article id and each
+      backend owns its warm set, with the shared file server still the only truth.
     </p>
   </section>
 
