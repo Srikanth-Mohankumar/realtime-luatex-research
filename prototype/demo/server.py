@@ -41,7 +41,7 @@ WORKDIR = ROOT / "testdocs"
 WORKDIR.mkdir(exist_ok=True)
 ENV = {**os.environ, "TEXINPUTS": str(ROOT / "engine") + ":"}
 GENERATED = ("-live", "-serve", "-conv", "-marked", "-body", "-draft",
-             "-dev", "-forautoqc", "preamble-only")
+             "-dev", "-forautoqc", "-apg", "-conversion", "preamble-only")
 
 args = [a for a in sys.argv[1:] if not a.isdigit()]
 PORT = int(sys.argv[-1]) if sys.argv[1:] and sys.argv[-1].isdigit() else 8123
@@ -70,13 +70,15 @@ def discover():
                 continue
             if "\\documentclass" in head and "\\paraid{" in head:
                 out.append(p)
-    seen, docs = set(), []
+    # duplicate stems: prefer the process_folder copy (the compile-ready
+    # environment their pipeline actually ran in)
+    by_stem = {}
     for p in out:
-        if p.stem in seen:
-            continue
-        seen.add(p.stem)
-        docs.append(p)
-    return docs
+        cur = by_stem.get(p.stem)
+        if cur is None or ("process_folder" in p.parts
+                           and "process_folder" not in cur.parts):
+            by_stem[p.stem] = p
+    return sorted(by_stem.values(), key=lambda p: p.stem)
 
 
 def workdir_copy(path):
