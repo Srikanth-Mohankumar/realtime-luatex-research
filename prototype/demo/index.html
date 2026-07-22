@@ -290,6 +290,10 @@ async function compilePara(pid, text) {
   const t0 = performance.now();
   const resp = await j(withDoc('/api/compile'), {doc: DOCID, id: pid, text});
   inflight = false;
+  if (resp.error) {
+    // never fail silently: show fast-path errors where the eye already is
+    $('curpara').textContent = '⚠ ' + resp.error.slice(0, 60);
+  }
   if (!resp.error) {
     overlay(pid, resp.sig, resp.fonts);
     approxShift(pid, resp.sig);
@@ -382,6 +386,11 @@ async function loadDoc(stem) {
     'heavy template)…</p>';
   $('src').value = '';
   DOC = await j(withDoc('/api/doc'));
+  if (DOC.error) {
+    $('pages').innerHTML = '<p style="color:#8b2635;padding:30px">⚠ ' +
+      DOC.error + ' — reload the page to get the current article list.</p>';
+    return;
+  }
   $('h-rev').textContent = DOC.rev;
   $('src').value = DOC.source;
   const s0 = await j(withDoc('/api/rev'));
