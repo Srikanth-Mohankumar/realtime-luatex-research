@@ -42,6 +42,11 @@ WORKDIR.mkdir(exist_ok=True)
 ENV = {**os.environ, "TEXINPUTS": str(ROOT / "engine") + ":"}
 GENERATED = ("-live", "-serve", "-conv", "-marked", "-body", "-draft",
              "-dev", "-forautoqc", "-apg", "-conversion", "preamble-only")
+# memory knobs: warm conv engines per article, concurrently open articles,
+# and minutes of inactivity before an article's engines are put to sleep
+POOL_TARGET = int(os.environ.get("RT_POOL", "2"))
+MAX_SESSIONS = int(os.environ.get("RT_SESSIONS", "2"))
+IDLE_MIN = float(os.environ.get("RT_IDLE_MIN", "15"))
 
 args = [a for a in sys.argv[1:] if not a.isdigit()]
 PORT = int(sys.argv[-1]) if sys.argv[1:] and sys.argv[-1].isdigit() else 8123
@@ -196,6 +201,7 @@ class Doc:
         self.conv_error = None
         self.last_conv_s = None
         self.source = self.file.read_text()
+        self.last_used = time.time()
 
         print(f"[{self.stem}] compiling reference ({self.file.name})...")
         self.write_live()
@@ -212,7 +218,7 @@ class Doc:
         self.preamble = self.split_source(self.source)[0]
         self.pool = []
         self.pool_lock = threading.Lock()
-        self.pool_target = 2
+        self.pool_target = POOL_TARGET
         self.pool.append(ConvEngine(self))
         self.prewarm_async()
         self.start_watcher()
@@ -267,6 +273,28 @@ class Doc:
             if cands:
                 self.caps[pid] = match_para(
                     None, text, [dict(p, attr=None) for p in cands])
+
+    # ---- engine sleep/wake (memory reaper) ----
+    def touch(self):
+        self.last_used = time.time()
+
+    def sleep_engines(self):
+        """Free the ~GBs of resident engines for an idle article; they
+        respawn lazily on the next edit (paying startup again)."""
+        self.drain_pool()
+        if self.srv is not None:
+            try:
+                self.srv.proc.kill()
+            except Exception:
+                pass
+            self.srv = None
+        print(f"[{self.stem}] idle: engines put to sleep")
+
+    def wake_engines(self):
+        if self.srv is None:
+            print(f"[{self.stem}] waking engines...")
+            self.spawn()
+            self.prewarm_async()
 
     # ---- fast-path engine ----
     def spawn(self):
@@ -409,7 +437,9 @@ class Doc:
         if cap is None:
             return {"error": f"no captured context for '{pid}'"}
         req = build_request(sanitize(text), cap)
+        self.touch()
         with self.lock:
+            self.wake_engines()
             box = {}
 
             def work():
@@ -451,6 +481,7 @@ class Doc:
         self.conv_timer.start()
 
     def update_source(self, source):
+        self.touch()
         structural = self.skeleton(source) != self.skeleton(self.source)
         self.source = source
         if structural:
@@ -557,6 +588,7 @@ class Doc:
                 self.converging = False
 
     def doc(self):
+        self.touch()
         paras = []
         for pid, text in self.body.items():
             cap = self.caps.get(pid)
@@ -572,9 +604,24 @@ class Doc:
 
 # ---- session registry (LRU-capped: engines are expensive) ----
 CATALOG = discover()
+
+
+def reaper():
+    while True:
+        time.sleep(60)
+        now = time.time()
+        with REG_LOCK:
+            docs = list(SESSIONS.values())
+        for d in docs:
+            if (d.srv is not None
+                    and now - getattr(d, "last_used", now) > IDLE_MIN * 60
+                    and not d.converging):
+                d.sleep_engines()
+
+
+threading.Thread(target=reaper, daemon=True).start()
 SESSIONS = {}          # stem -> Doc
 LRU = []               # stems, most recent last
-MAX_SESSIONS = 2
 REG_LOCK = threading.Lock()
 
 
