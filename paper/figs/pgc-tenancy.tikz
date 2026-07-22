@@ -1,0 +1,35 @@
+% Figure 4 — per-article tenancy (column width)
+\begin{tikzpicture}[
+  font=\scriptsize,
+  lane/.style={draw, dashed, rounded corners=3pt, inner sep=3.5pt},
+  cell/.style={draw, rounded corners=1.5pt, align=center, inner sep=2.5pt,
+               minimum width=21mm, font=\scriptsize},
+  hot/.style={cell, fill=black!12},
+  st/.style={cell, fill=black!5},
+  node distance=1.8mm and 4mm]
+
+  % article A
+  \node[hot] (a1) {warm engine};
+  \node[hot, below=of a1] (a2) {serve engine};
+  \node[st, below=of a2] (a3) {workspace\\ + capture};
+  \node[lane, fit=(a1)(a2)(a3), label={[font=\scriptsize\bfseries]above:article A}] (A) {};
+
+  % article B
+  \node[hot, right=9mm of a1] (b1) {warm engine};
+  \node[hot, below=of b1] (b2) {serve engine};
+  \node[st, below=of b2] (b3) {workspace\\ + capture};
+  \node[lane, fit=(b1)(b2)(b3), label={[font=\scriptsize\bfseries]above:article B}] (B) {};
+
+  % shared band
+  \node[cell, below=6mm of a3.south east, minimum width=47mm, anchor=north]
+    (shared) {\textbf{shared}: 4 build workers $\cdot$ 1 xml2tex worker
+      $\cdot$ 12\,GB envelope};
+
+  \draw[-{Stealth[length=1.6mm]}] (a3.south) -- (shared.north -| a3.south);
+  \draw[-{Stealth[length=1.6mm]}] (b3.south) -- (shared.north -| b3.south);
+
+  \node[below=1.5mm of shared, align=center, font=\scriptsize\itshape]
+    {nothing warm is shared \emph{between} articles:\\
+     capacity $=$ active articles $\times$ 2--3\,GB, and\\
+     articles shard cleanly across backends};
+\end{tikzpicture}

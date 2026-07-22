@@ -1,0 +1,38 @@
+% Figure 2 — the warm engine wrapper protocol (column width)
+\begin{tikzpicture}[font=\scriptsize,
+  msg/.style={-{Stealth[length=1.8mm]}, semithick},
+  life/.style={very thick},
+  ev/.style={font=\scriptsize\ttfamily}]
+
+  % lifelines
+  \node[font=\scriptsize\bfseries] (P0) at (0,6.4) {pool (Python)};
+  \node[font=\scriptsize\bfseries] (E0) at (4.6,6.4) {engine (\LuaTeX)};
+  \draw[life] (0,6.1) -- (0,-1.7);
+  \draw[life] (4.6,6.1) -- (4.6,-1.7);
+
+  \draw[msg] (0,5.7) -- node[above]{spawn, feed harness} (4.6,5.7);
+  \draw[fill=black!15] (4.35,5.5) rectangle (4.85,4.45);
+  \node[right, align=left] at (4.95,5.0)
+    {preamble typesets\\ ($\sim$13\,s, once)};
+  \draw[msg] (4.6,4.35) -- node[above, ev]{ENGINEREADY} (0,4.35);
+  \node[left, align=right, font=\scriptsize\itshape] at (-0.15,3.8)
+    {engine idles warm;\\ pool marks slot ready};
+
+  \draw[msg] (0,3.15) -- node[above, ev]{RUN body.tex capture.json} (4.6,3.15);
+  \draw[fill=black!30] (4.35,3.0) rectangle (4.85,1.95);
+  \node[right, align=left] at (4.95,2.5)
+    {body typesets\\ ($\sim$2--3\,s); capture\\ hooks record};
+  \draw[msg] (4.6,1.85) -- node[above, ev]{ENGINEDONE <ms>} (0,1.85);
+
+  \draw[msg] (0,1.1) -- node[above, ev]{QUIT} (4.6,1.1);
+  \draw[fill=black!15] (4.35,0.95) rectangle (4.85,0.15);
+  \node[right, align=left] at (4.95,0.55)
+    {\texttt{\textbackslash end\{document\}}:\\ trailer written,\\ PDF is valid};
+  \node[left, align=right, font=\scriptsize\itshape] at (-0.15,0.55)
+    {reader thread drains\\ stdout to EOF};
+  \draw[msg] (4.6,-0.15) -- node[above]{exit 0, PDF on disk} (0,-0.15);
+
+  \node[align=left, font=\scriptsize\itshape] at (2.3,-1.25)
+    {single-shot: one \texttt{RUN} per engine; a fresh\\
+     engine prewarms in the background meanwhile};
+\end{tikzpicture}

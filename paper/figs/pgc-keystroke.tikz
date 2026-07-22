@@ -1,0 +1,35 @@
+% Figure 3 — the keystroke path, editor to overlay (wide)
+\begin{tikzpicture}[
+  font=\footnotesize,
+  stp/.style={draw, rounded corners=2pt, align=center, inner sep=4.5pt,
+               minimum height=10mm},
+  eng/.style={stp, fill=black!12},
+  arr/.style={-{Stealth[length=2mm]}, semithick},
+  node distance=5mm and 7mm]
+
+  \node[stp, fill=black!3] (key) {keystroke\\[-1pt] {\scriptsize 450\,ms debounce}};
+  \node[stp, right=of key] (para) {cursor $\to$ \texttt{pgcid}\\[-1pt]
+    {\scriptsize string scan, no parse}};
+  \node[stp, right=of para] (post) {POST\\[-1pt] {\scriptsize paragraph-preview}};
+  \node[eng, right=of post] (x2t) {xml2tex\\[-1pt] {\scriptsize warm, $\sim$0.1\,s}};
+  \node[eng, right=of x2t] (span) {extract span\\[-1pt]
+    {\scriptsize by \cs{paraid}}};
+  \node[eng, right=of span] (serve) {serve engine\\[-1pt]
+    {\scriptsize \cs{vbox}, $\sim$10--100\,ms}};
+  \node[stp, fill=black!3, right=of serve] (ovl) {overlay\\[-1pt]
+    {\scriptsize mask + glyphs}};
+
+  \draw[arr] (key) -- (para);
+  \draw[arr] (para) -- (post);
+  \draw[arr] (post) -- (x2t);
+  \draw[arr] (x2t) -- (span);
+  \draw[arr] (span) -- (serve);
+  \draw[arr] (serve) -- node[above, font=\scriptsize]{sig} (ovl);
+
+  \node[below=4.5mm of x2t.south west, anchor=north west, align=left,
+        font=\scriptsize\itshape]
+    {captured context injected before the paragraph: 25 line-breaking parameters,\\
+     start font, baseline geometry; \cs{ref}/\cs{cite} transplanted from the aux file.\\
+     Median 164\,ms end to end; identical line breaks to the full build, to the
+     scaled point.};
+\end{tikzpicture}

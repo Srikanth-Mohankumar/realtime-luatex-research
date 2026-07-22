@@ -1,0 +1,54 @@
+% Figure 1 — PGC Editor warm-pipeline architecture (wide, two-column span)
+\begin{tikzpicture}[
+  font=\footnotesize,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
+              minimum height=8mm},
+  store/.style={draw, align=center, inner sep=4pt, fill=black!6},
+  eng/.style={box, fill=black!12},
+  arr/.style={-{Stealth[length=2mm]}, semithick},
+  node distance=6mm and 10mm]
+
+  % browser column
+  \node[box, fill=black!3, minimum width=32mm, minimum height=13mm]
+    (editor) {\textbf{Monaco XML editor}\\ paragraphs carry \texttt{pgcid}\\ stamped at load};
+  \node[box, fill=black!3, minimum width=32mm, minimum height=13mm, below=5mm of editor]
+    (viewer) {\textbf{PDF viewer} (pdf.js)\\ per-page overlay layer\\ live paragraph preview};
+  \node[font=\scriptsize\itshape, above=1.5mm of editor] {browser};
+
+  % backend column
+  \node[box, right=15mm of editor, minimum width=38mm, minimum height=11mm]
+    (queue) {\textbf{convert queue}\\ 4 workers $\cdot$ per-article lock\\ newest build wins};
+  \node[eng, below=4mm of queue, minimum width=38mm, minimum height=10mm]
+    (x2t) {\textbf{xml2tex worker}\\ persistent Node, NDJSON};
+  \node[eng, below=4mm of x2t, minimum width=38mm, minimum height=11mm]
+    (pool) {\textbf{warm engine pool}\\ preamble-resident \LuaTeX\\ single-shot per build};
+  \node[eng, below=4mm of pool, minimum width=38mm, minimum height=11mm]
+    (serve) {\textbf{serve engines}\\ persistent per article\\ one paragraph per request};
+  \node[font=\scriptsize\itshape, above=1.5mm of queue] {backend (FastAPI)};
+
+  % state column
+  \node[store, right=15mm of queue, minimum width=32mm, minimum height=10mm]
+    (ws) {\textbf{workspaces}\\ per article, on disk\\ aux files converge};
+  \node[store, below=4mm of ws, minimum width=32mm, minimum height=10mm]
+    (cap) {\textbf{paragraph capture}\\ contexts $\cdot$ signatures\\ page geometry};
+  \node[box, below=4mm of cap, minimum width=32mm, minimum height=10mm]
+    (fs) {\textbf{file server}\\ the single source\\ of truth};
+  \node[font=\scriptsize\itshape, above=1.5mm of ws] {state};
+
+  % flows
+  \draw[arr] (editor.east) -- node[above, font=\scriptsize]{build} (queue.west);
+  \draw[arr] (editor.south east) .. controls +(8mm,-4mm) and +(-10mm,3mm) ..
+    node[sloped, above, font=\scriptsize]{keystroke} (serve.west);
+  \draw[arr] (queue) -- (x2t);
+  \draw[arr] (x2t) -- (pool);
+  \draw[arr] (pool.west) .. controls +(-9mm,0mm) and +(9mm,2mm) ..
+    node[sloped, below, font=\scriptsize]{PDF + SSE} (viewer.east);
+  \draw[arr] (serve.north west) .. controls +(-7mm,1mm) and +(9mm,-3mm) ..
+    node[sloped, below, font=\scriptsize]{lines, $\sim$0.2\,s} (viewer.south east);
+  \draw[arr] (pool.east) -- node[above, font=\scriptsize]{writes} (cap.west);
+  \draw[arr, <->] (queue.east) -- (ws.west);
+  \draw[arr, <->] (ws) -- (cap);
+  \draw[arr, <->] (cap) -- (fs);
+  \draw[arr] (cap.south west) .. controls +(-6mm,-2mm) and +(6mm,2mm) ..
+    node[sloped, above, font=\scriptsize]{contexts} (serve.east);
+\end{tikzpicture}
