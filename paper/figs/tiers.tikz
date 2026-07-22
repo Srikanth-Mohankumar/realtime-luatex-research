@@ -1,0 +1,41 @@
+% Figure 2 — tier routing of an edit (column width)
+\begin{tikzpicture}[
+  font=\footnotesize,
+  q/.style={draw, diamond, aspect=2.4, align=center, inner sep=1pt,
+            font=\scriptsize},
+  act/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+              fill=black!8, font=\scriptsize},
+  fin/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+              fill=black!16, font=\scriptsize\bfseries},
+  arr/.style={-{Stealth[length=1.8mm]}, semithick},
+  lb/.style={font=\tiny\itshape},
+  node distance=4mm and 3mm]
+
+  \node[act, fill=black!3] (edit) {edit arrives};
+  \node[q, below=of edit] (inpara) {inside a marked\\ paragraph?};
+  \node[act, below left=5mm and -7mm of inpara] (fastpath)
+    {fast path: re-break\\ paragraph ($\sim$10\,ms)};
+  \node[q, below=of fastpath] (profile) {vertical profile\\ unchanged?};
+  \node[fin, below left=5mm and -5mm of profile] (patch)
+    {tier 0: patch page\\ cache in place\\ \emph{no recompile}};
+  \node[act, below right=5mm and -3mm of profile] (shift)
+    {tier 1: overlay +\\ shift column\\ below};
+  \node[q, below right=5mm and -8mm of inpara, xshift=6mm] (struct)
+    {skeleton\\ changed?};
+  \node[act, below=11mm of struct] (now) {repaginate\\ in 0.2\,s};
+  \node[fin, below=24mm of profile, xshift=17mm] (conv)
+    {warm-engine body re-typeset $\sim$3\,s\\
+     real PDF + print view $\sim$10\,s};
+
+  \draw[arr] (edit) -- (inpara);
+  \draw[arr] (inpara) -| node[lb, above, pos=.3] {yes} (fastpath);
+  \draw[arr] (inpara) -| node[lb, above, pos=.3] {no / satellite} (struct);
+  \draw[arr] (fastpath) -- (profile);
+  \draw[arr] (profile) -| node[lb, above, pos=.3] {yes} (patch);
+  \draw[arr] (profile) -| node[lb, above, pos=.3] {no} (shift);
+  \draw[arr] (struct) -- node[lb, right] {yes} (now);
+  \draw[arr] (shift.south) -- ++(0,-2.5mm) -| ([xshift=-4mm]conv.north);
+  \draw[arr] (now.south) -- ++(0,-2mm) -| ([xshift=4mm]conv.north);
+  \draw[arr, dashed] (patch.south) -- ++(0,-3mm)
+    node[lb, below, align=center] {deferred tidy\\ compile (25\,s)};
+\end{tikzpicture}

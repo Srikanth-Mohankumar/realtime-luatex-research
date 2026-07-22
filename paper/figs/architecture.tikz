@@ -1,0 +1,57 @@
+% Figure 1 — system architecture (wide, two-column span)
+\begin{tikzpicture}[
+  font=\footnotesize,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
+              minimum height=8mm},
+  store/.style={draw, align=center, inner sep=4pt, fill=black!6},
+  eng/.style={box, fill=black!12},
+  lbl/.style={font=\scriptsize\itshape, midway},
+  arr/.style={-{Stealth[length=2mm]}, semithick},
+  node distance=6mm and 10mm]
+
+  % client
+  \node[box, fill=black!3, minimum width=30mm, minimum height=24mm]
+    (browser) {\textbf{Browser}\\[1pt]
+      full-source editor\\ page view: raster\,+\,overlay};
+
+  % bridge
+  \node[box, fill=black!3, minimum width=34mm, minimum height=24mm,
+        right=14mm of browser]
+    (bridge) {\textbf{Bridge} (HTTP)\\[1pt]
+      per-article session\\ tier router \; watcher\\ LRU engine manager};
+
+  % engines column
+  \node[eng, right=16mm of bridge, yshift=13mm, minimum width=34mm]
+    (fast) {\textbf{fast-path engine}\\ persistent \LuaTeX\\
+            paragraph + context $\to$ lines};
+  \node[eng, below=4mm of fast, minimum width=34mm]
+    (pool) {\textbf{convergence pool}\\ warm, preamble-resident\\
+            single-shot body re-typeset};
+  \node[box, below=4mm of pool, minimum width=34mm]
+    (raster) {\textbf{rasterizer}\\ \texttt{pdftoppm} per rev};
+
+  % stores under bridge
+  \node[store, below=9mm of bridge, xshift=-13mm] (tex) {article\\ \texttt{.tex}};
+  \node[store, right=3mm of tex] (sat) {\texttt{satellite}\\ \texttt{.json}};
+  \node[store, right=3mm of sat] (cache) {page\\ cache};
+  \node[store, right=3mm of cache] (pdf) {real\\ PDF};
+
+  % flows
+  \draw[arr] ([yshift=3mm]browser.east) -- ([yshift=3mm]bridge.west)
+    node[lbl, above] {keystroke};
+  \draw[arr] ([yshift=-3mm]bridge.west) -- ([yshift=-3mm]browser.east)
+    node[lbl, below] {overlay $\sim$10\,ms};
+  \draw[arr] (bridge.east|-fast.west) ++(0,2mm) -- ([yshift=2mm]fast.west)
+    node[lbl, above] {paragraph};
+  \draw[arr] (bridge.north east) ++(-2mm,0) |- (pool.west)
+    node[lbl, above, pos=.75] {body $\sim$3\,s};
+  \draw[arr] (pool.south) -- (raster.north)
+    node[lbl, right] {quit $\Rightarrow$ PDF};
+  \draw[arr] (raster.west) -| ([xshift=6mm]pdf.north);
+  \draw[arr] (sat.north) -- ([xshift=-3mm]bridge.south)
+    node[lbl, left, pos=.4] {watch};
+  \draw[arr] (bridge.south) ++(3mm,0) -- (cache.north)
+    node[lbl, right, pos=.5] {patch};
+  \draw[arr] (cache.north east) -- ++(4mm,4mm) -| (browser.south)
+    node[lbl, below, pos=.78] {pages};
+\end{tikzpicture}

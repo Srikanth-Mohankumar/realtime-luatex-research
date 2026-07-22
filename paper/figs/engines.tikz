@@ -1,0 +1,31 @@
+% Figure 3 — warm single-shot engine lifecycle (column width)
+\begin{tikzpicture}[font=\scriptsize, yscale=.62]
+  % time axis
+  \draw[-{Stealth[length=2mm]}] (0,0) -- (8.6,0) node[below left] {time};
+
+  % engine A lane
+  \node[left, font=\scriptsize\bfseries] at (0,2.6) {engine A};
+  \draw[fill=black!20] (0,2.2) rectangle node{preamble 13\,s} (2.6,3.0);
+  \draw[fill=black!8]  (2.6,2.2) rectangle node{\emph{warm, idle}} (4.2,3.0);
+  \draw[fill=black!30] (4.2,2.2) rectangle node{body 3\,s} (5.2,3.0);
+  \draw[fill=black!8]  (5.2,2.2) rectangle node{quit$\to$PDF} (6.4,3.0);
+
+  % engine B lane (prewarm)
+  \node[left, font=\scriptsize\bfseries] at (0,1.2) {engine B};
+  \draw[fill=black!20] (4.3,0.8) rectangle node{preamble 13\,s} (6.9,1.6);
+  \draw[fill=black!8]  (6.9,0.8) rectangle node{\emph{warm}} (8.4,1.6);
+
+  % events
+  \draw[-{Stealth[length=1.6mm]}, thick] (4.2,3.6) -- (4.2,3.05);
+  \node[above, font=\tiny\itshape] at (4.2,3.6) {structural edit};
+  \draw[-{Stealth[length=1.6mm]}, thick, dashed] (4.25,1.9) -- (4.35,1.65);
+  \node[right, font=\tiny\itshape] at (3.15,1.95) {prewarm starts};
+  \draw[-{Stealth[length=1.6mm]}, thick] (6.4,2.6) -- (7.0,2.6)
+    node[right, font=\tiny\itshape] {rasterize};
+
+  % annotation
+  \node[align=left, font=\tiny\itshape, anchor=west] at (0, -0.75)
+    {each engine serves exactly one repagination: first-run semantics,\\
+     verified byte-identical to a fresh compile; the preamble loads off\\
+     the critical path};
+\end{tikzpicture}

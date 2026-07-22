@@ -18,3 +18,7 @@ prototype/templates/*/article-live.*
 prototype/templates/*/article-serve.*
 prototype/testdocs/
 prototype/templates/*/*-pngs-r*/
+paper/*.pdf
+paper/*.log
+paper/*.aux
+paper/*.out
