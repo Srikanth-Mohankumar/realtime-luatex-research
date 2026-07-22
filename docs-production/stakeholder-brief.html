@@ -278,7 +278,7 @@
     <div class="tablewrap"><table>
       <tr><th>Operator action</th><th>What runs</th><th class="num">Latency</th></tr>
       <tr><td>Open an article</td><td>engine prewarms in the background while the XML loads</td><td class="num">no wait added</td></tr>
-      <tr><td>Keystroke in a paragraph</td><td>paragraph re-typeset against captured context (measured: 164&thinsp;ms median); live overlay lands in Phase 2d</td><td class="num">~&thinsp;0.2&thinsp;s</td></tr>
+      <tr><td>Keystroke in a paragraph</td><td>paragraph re-typeset against captured context and drawn live over the page (measured: 164&thinsp;ms median; ~0.5&thinsp;s for the first preview after opening an article)</td><td class="num">~&thinsp;0.2&thinsp;s</td></tr>
       <tr><td>Build (typical)</td><td>warm xml2tex + body-only LuaTeX + SSE push</td><td class="num">3–5&thinsp;s</td></tr>
       <tr><td>Build (first after open, worst case)</td><td>engine still warming &rarr; runs cold once, next build is warm</td><td class="num">18–25&thinsp;s once</td></tr>
       <tr><td>Change <span class="mono">satellite.json</span> float placement</td><td>watcher &rarr; automatic warm rebuild</td><td class="num">3–5&thinsp;s</td></tr>
@@ -295,7 +295,7 @@
       <tr><td>2a · Stable paragraph identity</td><td><span class="mono">pgcid</span> stamped at load time; parity with the converter&rsquo;s own numbering proven on production articles (47/47)</td><td><span class="pill done">DONE</span></td></tr>
       <tr><td>2b · Paragraph capture</td><td>contexts, line signatures and page geometry recorded per paragraph during warm builds; geometry API for the viewer</td><td><span class="pill done">DONE</span></td></tr>
       <tr><td>2c · Paragraph preview</td><td>keystroke-path endpoint: one paragraph re-typeset in the article&rsquo;s persistent serve engine — 164&thinsp;ms median, exact parity, 14/14 test battery</td><td><span class="pill done">DONE</span></td></tr>
-      <tr><td>2d · Live overlay</td><td>preview rendered into the PDF viewer&rsquo;s per-page overlay layer, pushed over SSE</td><td><span class="pill next">NEXT</span></td></tr>
+      <tr><td>2d · Live overlay</td><td>live paragraph rendered into the PDF viewer&rsquo;s per-page overlay layer as you type (450&thinsp;ms debounce, cursor-tracked); serve engines prewarmed at article open, so the <em>first</em> keystroke preview is ~0.5&thinsp;s instead of ~9&thinsp;s</td><td><span class="pill done">DONE</span></td></tr>
     </table></div>
   </section>
 
