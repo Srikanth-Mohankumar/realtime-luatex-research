@@ -50,8 +50,12 @@ IDLE_MIN = float(os.environ.get("RT_IDLE_MIN", "15"))
 
 args = [a for a in sys.argv[1:] if not a.isdigit()]
 PORT = int(sys.argv[-1]) if sys.argv[1:] and sys.argv[-1].isdigit() else 8123
+# STANDARD DEMO: serves only the self-contained IEEEtran sample article
+# (production-style \paraid/\tagStructPara markup, prodshim stand-ins).
+# The production track is opt-in: pass explicit files or scan roots, e.g.
+#   python3 server.py /data/neopage/watcher/to-check
 SCAN_ROOTS = ([Path(a).resolve() for a in args] if args else
-              [WORKDIR, Path("/data/neopage/watcher/to-check")])
+              [ROOT / "templates" / "ieeetran" / "article.tex"])
 
 PARA_RE = re.compile(
     r"\\paraid\{([\w.-]+)\}(.*?)(?:\\tagStructParaEnd\{\}|\n[ \t]*\n|$)", re.S)

@@ -45,8 +45,14 @@ itself; needs TeX Live 2025 with the class installed).
 ## Interactive demo
 
 ```
-cd prototype/demo && python3 server.py [path/to/your.tex]   # default:
-# templates/ieeetran/article.tex — then open http://localhost:8123
+cd prototype/demo && python3 -u server.py    # standard demo: the IEEEtran
+# sample article only — then open http://localhost:8123
+#
+# production track (separate, opt-in): pass explicit files or scan roots,
+#   python3 -u server.py /path/to/article.tex
+#   python3 -u server.py /data/neopage/watcher/to-check
+# memory knobs: RT_POOL (warm engines/article, default 2),
+#   RT_SESSIONS (open articles, default 2), RT_IDLE_MIN (idle reaper, 15)
 ```
 
 `demo/server.py` (stdlib only) bridges a browser page to a persistent
