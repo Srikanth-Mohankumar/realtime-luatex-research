@@ -430,9 +430,10 @@ typesetting depends on machinery a \cs{vbox} cannot reproduce ---
 footnotes, display mathematics, list items, float captions (the wrapper
 macro switches fonts mid-stream) --- are not eligible for the preview
 fast path and simply take the 3--5\,s build path. The preview overlay
-renders glyphs by character code with the viewer's fonts, which is a
-deliberate approximation: positions are engine-exact, faces are
-approximate, and the next build replaces the overlay with truth.
+draws glyphs at engine-exact positions in the article's own typefaces,
+fetched on demand through a font endpoint keyed by engine font id (a
+serif fallback shows at the same positions until each face loads); the
+next build still replaces the overlay with rendered truth.
 
 \section{Measured results}
 
