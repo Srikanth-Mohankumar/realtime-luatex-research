@@ -165,9 +165,9 @@
         <div class="note">up to 7.3&times; faster · identical output</div>
       </div>
       <div class="tile">
-        <div class="label">Next — keystroke preview</div>
-        <div class="value">&lt;&thinsp;1<small>&thinsp;s</small></div>
-        <div class="note">single-paragraph fast path (Phase 2, in verification)</div>
+        <div class="label">New — keystroke preview</div>
+        <div class="value">0.16<small>&thinsp;s</small></div>
+        <div class="note">single-paragraph fast path, measured median; exact glyph parity</div>
       </div>
     </div>
   </section>
@@ -278,7 +278,7 @@
     <div class="tablewrap"><table>
       <tr><th>Operator action</th><th>What runs</th><th class="num">Latency</th></tr>
       <tr><td>Open an article</td><td>engine prewarms in the background while the XML loads</td><td class="num">no wait added</td></tr>
-      <tr><td>Keystroke in a paragraph <span class="pill prog">PHASE&nbsp;2</span></td><td>paragraph re-typeset against captured context; live overlay on the PDF page</td><td class="num">&lt;&thinsp;1&thinsp;s target</td></tr>
+      <tr><td>Keystroke in a paragraph</td><td>paragraph re-typeset against captured context (measured: 164&thinsp;ms median); live overlay lands in Phase 2d</td><td class="num">~&thinsp;0.2&thinsp;s</td></tr>
       <tr><td>Build (typical)</td><td>warm xml2tex + body-only LuaTeX + SSE push</td><td class="num">3–5&thinsp;s</td></tr>
       <tr><td>Build (first after open, worst case)</td><td>engine still warming &rarr; runs cold once, next build is warm</td><td class="num">18–25&thinsp;s once</td></tr>
       <tr><td>Change <span class="mono">satellite.json</span> float placement</td><td>watcher &rarr; automatic warm rebuild</td><td class="num">3–5&thinsp;s</td></tr>
@@ -294,7 +294,7 @@
       <tr><td>1 · Warm pipeline</td><td>engine pool, persistent xml2tex worker, per-article workspaces, prewarm-on-open, SSE push, supersession, Prometheus metrics, golden tests</td><td><span class="pill done">DONE</span></td></tr>
       <tr><td>2a · Stable paragraph identity</td><td><span class="mono">pgcid</span> stamped at load time; parity with the converter&rsquo;s own numbering proven on production articles (47/47)</td><td><span class="pill done">DONE</span></td></tr>
       <tr><td>2b · Paragraph capture</td><td>contexts, line signatures and page geometry recorded per paragraph during warm builds; geometry API for the viewer</td><td><span class="pill done">DONE</span></td></tr>
-      <tr><td>2c · Paragraph preview</td><td>keystroke-path endpoint: one paragraph re-typeset in the article&rsquo;s persistent serve engine</td><td><span class="pill prog">IN&nbsp;VERIFICATION</span></td></tr>
+      <tr><td>2c · Paragraph preview</td><td>keystroke-path endpoint: one paragraph re-typeset in the article&rsquo;s persistent serve engine — 164&thinsp;ms median, exact parity, 14/14 test battery</td><td><span class="pill done">DONE</span></td></tr>
       <tr><td>2d · Live overlay</td><td>preview rendered into the PDF viewer&rsquo;s per-page overlay layer, pushed over SSE</td><td><span class="pill next">NEXT</span></td></tr>
     </table></div>
   </section>
