@@ -1,0 +1,322 @@
+<title>PGC Editor: Real-Time Compile Architecture</title>
+<style>
+  :root {
+    --paper: #F6F5F1; --card: #FFFFFF; --ink: #212226; --muted: #64666D;
+    --hairline: #DFDCD3; --cold: #4B6EA8; --warm: #BE531F; --accent: #BE531F;
+    --chip-done-bg: #E4EBDD; --chip-done-ink: #3E5A2E;
+    --chip-prog-bg: #F3E4D3; --chip-prog-ink: #8A4A15;
+    --chip-next-bg: #E8E6DF; --chip-next-ink: #64666D;
+    --code-bg: #EEECE5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #17181C; --card: #1F2126; --ink: #E8E7E2; --muted: #9A9CA3;
+      --hairline: #2F3138; --cold: #638FE6; --warm: #D65F1E; --accent: #D65F1E;
+      --chip-done-bg: #2A3524; --chip-done-ink: #A7C48E;
+      --chip-prog-bg: #3B2B1B; --chip-prog-ink: #E0A36C;
+      --chip-next-bg: #2A2C31; --chip-next-ink: #9A9CA3;
+      --code-bg: #26282E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #17181C; --card: #1F2126; --ink: #E8E7E2; --muted: #9A9CA3;
+    --hairline: #2F3138; --cold: #638FE6; --warm: #D65F1E; --accent: #D65F1E;
+    --chip-done-bg: #2A3524; --chip-done-ink: #A7C48E;
+    --chip-prog-bg: #3B2B1B; --chip-prog-ink: #E0A36C;
+    --chip-next-bg: #2A2C31; --chip-next-ink: #9A9CA3;
+    --code-bg: #26282E;
+  }
+  :root[data-theme="light"] {
+    --paper: #F6F5F1; --card: #FFFFFF; --ink: #212226; --muted: #64666D;
+    --hairline: #DFDCD3; --cold: #4B6EA8; --warm: #BE531F; --accent: #BE531F;
+    --chip-done-bg: #E4EBDD; --chip-done-ink: #3E5A2E;
+    --chip-prog-bg: #F3E4D3; --chip-prog-ink: #8A4A15;
+    --chip-next-bg: #E8E6DF; --chip-next-ink: #64666D;
+    --code-bg: #EEECE5;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 56px 24px 96px;
+  }
+  .wrap { max-width: 1020px; margin: 0 auto; display: grid; gap: 64px; }
+  h1, h2, h3 { font-family: "Avenir Next", "Helvetica Neue", Seravek, system-ui, sans-serif; text-wrap: balance; }
+  h1 { font-size: 34px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.15; }
+  h2 { font-size: 21px; font-weight: 600; letter-spacing: -0.01em; }
+  section > h2 { margin-bottom: 6px; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .lede { color: var(--muted); max-width: 62ch; }
+  .mono, td.num, .seg-label, .bar-val { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--muted); background: var(--card); }
+
+  /* stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+  .tile { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; padding: 20px 22px; }
+  .tile .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-size: 38px; font-weight: 650; letter-spacing: -0.02em; margin-top: 6px; font-family: "Avenir Next", "Helvetica Neue", system-ui, sans-serif; }
+  .tile .value small { font-size: 17px; font-weight: 500; color: var(--muted); }
+  .tile .note { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .tile.emph { border-color: var(--warm); }
+  .tile.emph .value { color: var(--warm); }
+
+  /* time-proportional pipelines */
+  .pipe { display: grid; gap: 8px; margin-top: 18px; }
+  .pipe-row { display: grid; grid-template-columns: 168px 1fr; align-items: center; gap: 14px; }
+  .pipe-name { font-size: 13px; color: var(--muted); text-align: right; }
+  .pipe-name b { display: block; color: var(--ink); font-size: 14px; }
+  .track { position: relative; height: 40px; }
+  .seg {
+    position: absolute; top: 0; height: 40px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .seg .seg-label { font-size: 11.5px; color: #fff; white-space: nowrap; padding: 0 6px; }
+  .seg.cold { background: var(--cold); }
+  .seg.warm { background: var(--warm); }
+  .seg.faint { background: color-mix(in oklab, var(--cold) 38%, var(--paper)); }
+  .seg.faint .seg-label { color: var(--ink); opacity: 0.85; }
+  .seg:hover::after {
+    content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 6px);
+    transform: translateX(-50%); background: var(--ink); color: var(--paper);
+    font-size: 12px; padding: 4px 9px; border-radius: 6px; white-space: nowrap; z-index: 3;
+  }
+  .axis { display: grid; grid-template-columns: 168px 1fr; gap: 14px; margin-top: 4px; }
+  .axis .scale { position: relative; height: 18px; border-top: 1px solid var(--hairline); font-size: 11px; color: var(--muted); }
+  .axis .scale span { position: absolute; top: 3px; transform: translateX(-50%); }
+
+  /* architecture diagram */
+  .arch { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 18px; margin-top: 20px; align-items: stretch; }
+  .arch-col { display: grid; gap: 12px; align-content: start; }
+  .arch-col > .eyebrow { margin-bottom: 0; }
+  .node { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; padding: 13px 15px; }
+  .node b { font-size: 14px; display: block; }
+  .node span { font-size: 12.5px; color: var(--muted); display: block; margin-top: 3px; line-height: 1.45; }
+  .node.hot { border-left: 3px solid var(--warm); }
+  .node.store { background: var(--code-bg); border-style: dashed; }
+  .flow { font-size: 12px; color: var(--muted); text-align: center; padding: 1px 0; }
+
+  /* tables */
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; font-size: 14px; }
+  .tablewrap { overflow-x: auto; margin-top: 18px; border-radius: 10px; }
+  th { text-align: left; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 11px 16px; border-bottom: 1px solid var(--hairline); }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { text-align: right; white-space: nowrap; }
+  th.num { text-align: right; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: baseline; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; padding: 2px 10px; border-radius: 999px; }
+  .pill.done { background: var(--chip-done-bg); color: var(--chip-done-ink); }
+  .pill.prog { background: var(--chip-prog-bg); color: var(--chip-prog-ink); }
+  .pill.next { background: var(--chip-next-bg); color: var(--chip-next-ink); }
+
+  /* per-article comparison bars */
+  .cmp { display: grid; gap: 18px; margin-top: 18px; }
+  .cmp-article { display: grid; gap: 6px; }
+  .cmp-article .name { font-size: 13px; color: var(--muted); }
+  .bar-row { display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: center; }
+  .bar-row .who { font-size: 12px; color: var(--muted); text-align: right; }
+  .bar-track { position: relative; height: 22px; }
+  .bar { height: 22px; border-radius: 4px; display: inline-block; }
+  .bar-val { font-size: 12.5px; color: var(--ink); margin-left: 8px; }
+  .legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); margin-top: 14px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; }
+  .legend .l-cold::before { background: var(--cold); }
+  .legend .l-warm::before { background: var(--warm); }
+
+  .rails { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 18px; }
+  .rail { background: var(--card); border: 1px solid var(--hairline); border-radius: 10px; padding: 16px 18px; }
+  .rail b { font-size: 14px; }
+  .rail p { font-size: 13px; color: var(--muted); margin-top: 5px; }
+  code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-size: 13px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  footer { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--hairline); padding-top: 18px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">PGC Editor · Engineering Brief · July 2026</div>
+    <h1>From a 20-second build to a live page:<br>the warm compile architecture</h1>
+    <p class="lede" style="margin-top:12px">
+      Every correction in the PGC Editor used to pay a full XML&rarr;TeX&rarr;PDF compile —
+      about 20 seconds, mostly spent re-doing work that had not changed. The new
+      architecture keeps that work <b>resident in warm engine processes</b>, so a build
+      costs only what actually changed. Same templates, same output — verified
+      byte-for-byte — just without the repeated cold starts.
+    </p>
+    <div class="chips">
+      <span class="chip">branch <span class="mono">feature/warm-pipeline</span></span>
+      <span class="chip">flag-gated · <span class="mono">WARM_ENGINES=1</span></span>
+      <span class="chip">xml2tex2.0 customers (ACS, Sage)</span>
+      <span class="chip">cold path preserved as automatic fallback</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">Headline numbers · measured on production articles</div>
+    <div class="tiles">
+      <div class="tile">
+        <div class="label">Before — every build</div>
+        <div class="value">18–25<small>&thinsp;s</small></div>
+        <div class="note">full cold pipeline, every time</div>
+      </div>
+      <div class="tile emph">
+        <div class="value">3–5<small>&thinsp;s</small></div>
+        <div class="label" style="margin-top:2px">After — every build</div>
+        <div class="note">up to 7.3&times; faster · identical output</div>
+      </div>
+      <div class="tile">
+        <div class="label">Next — keystroke preview</div>
+        <div class="value">&lt;&thinsp;1<small>&thinsp;s</small></div>
+        <div class="note">single-paragraph fast path (Phase 2, in verification)</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Where the time goes</div>
+    <h2>The same build, before and after</h2>
+    <p class="lede">Segment widths are proportional to real measured time (Sage article
+      CCH1434288, 14 pages). The cold pipeline pays the TeX template preamble — fonts,
+      packages, tagging machinery — on every single build. The warm pipeline pays it
+      once per article, before the operator's first build.</p>
+
+    <!-- scale: 24.5s total = 100% -->
+    <div class="pipe" role="img" aria-label="Before: xml2tex 0.7s, LuaTeX cold 21.8s, polling 2s = 24.5s. After: xml2tex warm 0.3s, LuaTeX warm 2.8s, push delivery = 3.1s.">
+      <div class="pipe-row">
+        <div class="pipe-name"><b>Before</b>cold, per build</div>
+        <div class="track">
+          <div class="seg cold faint" style="left:0%; width:2.9%" data-tip="xml2tex: new Node process each build — 0.7s"><span class="seg-label"></span></div>
+          <div class="seg cold" style="left:3.1%; width:88.7%" data-tip="LuaTeX: cold start + full document — 21.8s"><span class="seg-label">LuaTeX cold start + full document · 21.8&thinsp;s</span></div>
+          <div class="seg cold faint" style="left:92%; width:8%" data-tip="result discovered by 2s polling"><span class="seg-label">poll</span></div>
+        </div>
+      </div>
+      <div class="pipe-row">
+        <div class="pipe-name"><b>After</b>warm, per build</div>
+        <div class="track">
+          <div class="seg warm faint" style="left:0%; width:1.4%" data-tip="xml2tex: persistent worker — 0.3s"></div>
+          <div class="seg warm" style="left:1.6%; width:11.4%" data-tip="LuaTeX: preamble already resident, body only — 2.8s"><span class="seg-label">2.8&thinsp;s</span></div>
+        </div>
+      </div>
+      <div class="axis"><div></div><div class="scale">
+        <span style="left:0%">0</span><span style="left:20.4%">5&thinsp;s</span>
+        <span style="left:40.8%">10&thinsp;s</span><span style="left:61.2%">15&thinsp;s</span>
+        <span style="left:81.6%">20&thinsp;s</span><span style="left:98%">24.5&thinsp;s</span>
+      </div></div>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin-top:12px">
+      The freed seconds are not deferred or approximated — the warm build produces the
+      same <span class="mono">.tex</span> and a text-identical PDF, gated by an automated
+      golden comparison before the flag ever turns on for a customer.
+    </p>
+  </section>
+
+  <section>
+    <div class="eyebrow">System design</div>
+    <h2>What runs where</h2>
+    <div class="arch">
+      <div class="arch-col">
+        <div class="eyebrow">Editor (browser)</div>
+        <div class="node"><b>Monaco XML editor</b><span>paragraphs carry stable <span class="mono">pgcid</span> identity, stamped at load</span></div>
+        <div class="flow">&darr; build / keystroke &darr;</div>
+        <div class="node"><b>PDF viewer</b><span>pdf.js with a per-page overlay layer for live paragraph previews (Phase 2d)</span></div>
+      </div>
+      <div class="arch-col">
+        <div class="eyebrow">Backend (FastAPI)</div>
+        <div class="node"><b>Convert queue</b><span>per-article lock · newest build wins (supersession) · SSE push replaces 2s polling</span></div>
+        <div class="node hot"><b>xml2tex worker</b><span>persistent Node process, templates parsed once — 0.3–0.5s per conversion, was 0.7–1.9s + spawn</span></div>
+        <div class="node hot"><b>Warm engine pool</b><span>preamble-resident LuaTeX, single-shot per build for output safety; prewarmed when an article is opened and after every build</span></div>
+        <div class="node hot"><b>Paragraph serve engines</b><span>persistent per-article; re-typeset one paragraph with its captured context in ~10–100&thinsp;ms (Phase 2c)</span></div>
+      </div>
+      <div class="arch-col">
+        <div class="eyebrow">State (disposable vs durable)</div>
+        <div class="node store"><b>Per-article workspaces</b><span>disk, LRU-capped — aux files converge across builds</span></div>
+        <div class="node store"><b>Paragraph capture</b><span>per-pgcid typesetting context, line signatures, page geometry — recorded free during warm builds</span></div>
+        <div class="node"><b>File server</b><span>the single source of truth; killing any warm state costs one slower build, never data</span></div>
+      </div>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin-top:14px">
+      Memory is bounded by process count, not hope: engine pool and workspaces are
+      hard-capped with idle reapers, and the container now runs under an explicit
+      <code>mem_limit</code>. One heavy-template article &asymp; 2–3&thinsp;GB resident; the light demo
+      article &asymp; 0.3&thinsp;GB.
+    </p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Evidence</div>
+    <h2>Measured on real production articles</h2>
+    <div class="cmp">
+      <!-- scale: 24.5s = 100% -->
+      <div class="cmp-article">
+        <div class="name">ACS · AM4c13605 · 10 pages, structure tagging, OpenType fonts</div>
+        <div class="bar-row"><div class="who">cold</div><div class="bar-track"><span class="bar" style="width:76.7%; background:var(--cold)"></span><span class="bar-val">18.8&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">warm</div><div class="bar-track"><span class="bar" style="width:19.2%; background:var(--warm)"></span><span class="bar-val">4.7&thinsp;s &nbsp;·&nbsp; 4.0&times;</span></div></div>
+      </div>
+      <div class="cmp-article">
+        <div class="name">Sage · CCH1434288 · 14 pages, data-driven float placement</div>
+        <div class="bar-row"><div class="who">cold</div><div class="bar-track"><span class="bar" style="width:91.8%; background:var(--cold)"></span><span class="bar-val">22.5&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">warm</div><div class="bar-track"><span class="bar" style="width:12.7%; background:var(--warm)"></span><span class="bar-val">3.1&thinsp;s &nbsp;·&nbsp; 7.3&times;</span></div></div>
+      </div>
+      <div class="cmp-article">
+        <div class="name">Live stack check · operator-observed, same article edited in the running editor</div>
+        <div class="bar-row"><div class="who">cold</div><div class="bar-track"><span class="bar" style="width:92.7%; background:var(--cold)"></span><span class="bar-val">22.7&thinsp;s</span></div></div>
+        <div class="bar-row"><div class="who">warm</div><div class="bar-track"><span class="bar" style="width:16.7%; background:var(--warm)"></span><span class="bar-val">4.1&thinsp;s</span></div></div>
+      </div>
+      <div class="legend"><span class="l-cold">cold pipeline (before)</span><span class="l-warm">warm pipeline (after)</span></div>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin-top:12px">
+      Every warm/cold pair passed the golden gate: equivalent <span class="mono">.tex</span>
+      (one known timestamp normalized) and identical PDF text content. Backend test
+      suite: 33 passing; fidelity previously validated to zero scaled points per glyph
+      across four template families.
+    </p>
+  </section>
+
+  <section>
+    <div class="eyebrow">The operator's ladder</div>
+    <h2>What an edit costs now</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Operator action</th><th>What runs</th><th class="num">Latency</th></tr>
+      <tr><td>Open an article</td><td>engine prewarms in the background while the XML loads</td><td class="num">no wait added</td></tr>
+      <tr><td>Keystroke in a paragraph <span class="pill prog">PHASE&nbsp;2</span></td><td>paragraph re-typeset against captured context; live overlay on the PDF page</td><td class="num">&lt;&thinsp;1&thinsp;s target</td></tr>
+      <tr><td>Build (typical)</td><td>warm xml2tex + body-only LuaTeX + SSE push</td><td class="num">3–5&thinsp;s</td></tr>
+      <tr><td>Build (first after open, worst case)</td><td>engine still warming &rarr; runs cold once, next build is warm</td><td class="num">18–25&thinsp;s once</td></tr>
+      <tr><td>Change <span class="mono">satellite.json</span> float placement</td><td>watcher &rarr; automatic warm rebuild</td><td class="num">3–5&thinsp;s</td></tr>
+      <tr><td>Repeated builds stacked up</td><td>only the newest compiles; older jobs return &ldquo;superseded&rdquo;</td><td class="num">one compile total</td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Delivery status</div>
+    <h2>Phases</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Phase</th><th>Scope</th><th>Status</th></tr>
+      <tr><td>1 · Warm pipeline</td><td>engine pool, persistent xml2tex worker, per-article workspaces, prewarm-on-open, SSE push, supersession, Prometheus metrics, golden tests</td><td><span class="pill done">DONE</span></td></tr>
+      <tr><td>2a · Stable paragraph identity</td><td><span class="mono">pgcid</span> stamped at load time; parity with the converter&rsquo;s own numbering proven on production articles (47/47)</td><td><span class="pill done">DONE</span></td></tr>
+      <tr><td>2b · Paragraph capture</td><td>contexts, line signatures and page geometry recorded per paragraph during warm builds; geometry API for the viewer</td><td><span class="pill done">DONE</span></td></tr>
+      <tr><td>2c · Paragraph preview</td><td>keystroke-path endpoint: one paragraph re-typeset in the article&rsquo;s persistent serve engine</td><td><span class="pill prog">IN&nbsp;VERIFICATION</span></td></tr>
+      <tr><td>2d · Live overlay</td><td>preview rendered into the PDF viewer&rsquo;s per-page overlay layer, pushed over SSE</td><td><span class="pill next">NEXT</span></td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Why this is safe to roll out</div>
+    <h2>Safety rails</h2>
+    <div class="rails">
+      <div class="rail"><b>Cold path never removed</b><p>Any warm-path failure falls back to today&rsquo;s pipeline automatically. Worst case equals current behavior.</p></div>
+      <div class="rail"><b>Output-identical, gated</b><p>A golden byte/text comparison between cold and warm output guards the flag per customer; engines are single-shot so no state can leak between builds.</p></div>
+      <div class="rail"><b>Flag-gated rollout</b><p><code>WARM_ENGINES=1</code> per environment; Elsevier/1.x untouched until its own decision.</p></div>
+      <div class="rail"><b>Observable</b><p><code>/metrics</code>: per-stage warm/cold histograms per customer; the fallback-rate counter is the health canary.</p></div>
+      <div class="rail"><b>Memory bounded</b><p>Engine and workspace counts hard-capped with idle reapers; container <code>mem_limit</code>; warm state is disposable by design.</p></div>
+      <div class="rail"><b>Tested</b><p>First-ever compile-path test suite: 33 unit tests plus an end-to-end golden test runnable against any dataset.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Prepared from the <span class="mono">realtime-luatex-research</span> program
+    (production-flow branch) and the <span class="mono">mr-bean feature/warm-pipeline</span>
+    implementation · all latency figures measured on production datasets on the
+    development host · fidelity method: engine-exact glyph positions, golden
+    tex/PDF-text comparison.
+  </footer>
+</div>
