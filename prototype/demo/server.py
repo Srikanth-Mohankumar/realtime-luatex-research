@@ -99,13 +99,25 @@ def workdir_copy(path):
         path.parent.name == "process_folder" else WORKDIR / path.parent.name
     if not (dest / path.name).exists():
         print(f"copying {path.parent} -> {dest}")
-        shutil.copytree(path.parent, dest, dirs_exist_ok=True)
+        # never drag our own runtime artifacts (stale rasters, generated
+        # tex variants, logs) from a previous session into a fresh one
+        shutil.copytree(path.parent, dest, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(
+                            "*-pngs-r*", "*-live.*", "*-serve.*", "*-conv*",
+                            "*-marked.*", "*-body.tex", "*-capture.json",
+                            "*.log", "*.aux", "*.synctex.gz"))
     return dest / path.name
 
 
 def sanitize(text):
     lines = [re.sub(r"(?<!\\)%.*", "", l) for l in text.splitlines()]
     text = " ".join(l.strip() for l in lines).strip()
+    # mid-edit input must not be able to KILL the persistent engine:
+    # \end{document}/\endinput terminate it, a half-typed \input aborts on
+    # a missing file. Strip them from the fast path; the convergence pass
+    # compiles the real source and handles their true semantics.
+    text = re.sub(r"\\end\{document\}|\\endinput|\\dump\b", "", text)
+    text = re.sub(r"\\(?:input|include)\b\s*(\{[^}]*\}|\S*)", "", text)
     if text.count("$") % 2:
         text += "$"
     diff = text.count("{") - text.count("}")
